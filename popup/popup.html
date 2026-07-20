@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Proxy Manager</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="app">
+    <header>
+      <svg class="logo" width="38" height="38" viewBox="0 0 96 96" aria-hidden="true">
+        <defs>
+          <linearGradient id="logoGrad" x1="0" y1="0" x2="96" y2="96" gradientUnits="userSpaceOnUse">
+            <stop offset="0" class="logo-stop-1"/>
+            <stop offset="1" class="logo-stop-2"/>
+          </linearGradient>
+        </defs>
+        <rect x="3" y="3" width="90" height="90" rx="22" class="logo-tile"/>
+        <rect x="3" y="3" width="90" height="90" rx="22" class="logo-border"/>
+        <g class="logo-orbit">
+          <circle cx="48" cy="48" r="24" class="logo-ring"/>
+          <circle cx="48" cy="24" r="5.5" class="logo-node-1"/>
+          <circle cx="68.78" cy="60" r="5.5" class="logo-node-2"/>
+          <circle cx="27.22" cy="60" r="5.5" class="logo-node-3"/>
+        </g>
+        <circle cx="48" cy="48" r="8.5" class="logo-core"/>
+      </svg>
+      <div class="title-block">
+        <h1>Proxy Manager</h1>
+        <p class="subtitle" id="statusLine">Direct connection</p>
+      </div>
+      <div class="status-wrap">
+        <span class="status-text" id="statusText">Direct</span>
+        <div class="status-dot" id="statusDot" title="Status"></div>
+      </div>
+      <button id="settingsBtn" class="icon-btn gear-btn" type="button" title="Settings">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </button>
+    </header>
+
+    <main>
+      <!-- Proxy list view -->
+      <section id="listView" class="view">
+        <div class="section-label">Connection</div>
+        <div id="proxyList"></div>
+        <button id="addBtn" class="btn-primary" type="button">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+          Add Proxy
+        </button>
+      </section>
+
+      <!-- Add / edit proxy form view -->
+      <section id="formView" class="view hidden">
+        <div class="form-header">
+          <button id="backBtn" class="icon-btn" type="button" title="Back">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>
+          </button>
+          <h2 id="formTitle">Add Proxy</h2>
+        </div>
+
+        <form id="proxyForm" autocomplete="off" novalidate>
+          <!-- scrollable fields; action buttons below stay pinned -->
+          <div class="form-scroll" id="formScroll">
+            <label class="field">
+              <span>Name</span>
+              <input id="fName" type="text" placeholder="e.g. Work VPN" maxlength="40">
+            </label>
+
+            <div class="field">
+              <span>Color</span>
+              <div class="swatches" id="colorRow"></div>
+            </div>
+
+            <div class="field">
+              <span>Protocol</span>
+              <div class="segmented" id="typeSeg">
+                <button type="button" data-type="http" class="active">HTTP</button>
+                <button type="button" data-type="https">HTTPS</button>
+                <button type="button" data-type="socks">SOCKS5</button>
+                <button type="button" data-type="socks4">SOCKS4</button>
+              </div>
+            </div>
+
+            <div class="field-row">
+              <label class="field grow">
+                <span>Host</span>
+                <input id="fHost" type="text" placeholder="127.0.0.1">
+              </label>
+              <label class="field port">
+                <span>Port</span>
+                <input id="fPort" type="text" inputmode="numeric" placeholder="8080">
+              </label>
+            </div>
+
+            <div class="toggle-row">
+              <div>
+                <div class="label">Authentication</div>
+                <div class="hint">Username &amp; password</div>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="fAuth">
+                <span class="slider"></span>
+              </label>
+            </div>
+
+            <div id="authFields" class="collapsible">
+              <div class="field-row">
+                <label class="field grow">
+                  <span>Username</span>
+                  <input id="fUser" type="text" autocomplete="off">
+                </label>
+                <label class="field grow">
+                  <span>Password</span>
+                  <input id="fPass" type="password" autocomplete="new-password">
+                </label>
+              </div>
+            </div>
+
+            <div class="toggle-row" id="dnsRow" hidden>
+              <div>
+                <div class="label">Remote DNS</div>
+                <div class="hint">Resolve DNS through the proxy</div>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="fDns" checked>
+                <span class="slider"></span>
+              </label>
+            </div>
+
+            <div class="toggle-row">
+              <div>
+                <div class="label">Persistent</div>
+                <div class="hint">Connect to this proxy on Firefox startup</div>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="fPersistent">
+                <span class="slider"></span>
+              </label>
+            </div>
+
+            <button type="button" class="btn-test" id="testBtn">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+              Test Connection
+            </button>
+            <div class="test-result" id="testResult"></div>
+          </div>
+
+          <div class="form-error" id="formError"></div>
+
+          <div class="form-actions">
+            <button type="button" class="btn-ghost" id="cancelBtn">Cancel</button>
+            <button type="button" class="btn-ghost" id="cloneBtn" hidden>Clone</button>
+            <button type="submit" class="btn-primary" id="saveBtn">Save</button>
+            <button type="submit" class="btn-primary" id="connectBtn" hidden>Connect</button>
+          </div>
+        </form>
+      </section>
+
+      <!-- Global settings view -->
+      <section id="settingsView" class="view hidden">
+        <div class="form-header">
+          <button id="settingsBackBtn" class="icon-btn" type="button" title="Back">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>
+          </button>
+          <h2>Settings</h2>
+        </div>
+
+        <div class="section-label">Backup &amp; Restore</div>
+        <p class="settings-desc">Export your proxy list to a file, or restore it from a previous backup. Restoring replaces the current list.</p>
+
+        <div class="settings-actions">
+          <button id="exportBtn" class="btn-ghost settings-btn" type="button">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Export
+          </button>
+          <button id="importBtn" class="btn-ghost settings-btn" type="button">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            Import
+          </button>
+        </div>
+
+        <div class="drop-zone" id="dropZone">… or drop a backup .json file here</div>
+        <input type="file" id="importFile" accept="application/json,.json" hidden>
+
+        <div class="settings-message" id="settingsMsg"></div>
+
+        <div class="section-label about-label">About</div>
+        <div class="about">
+          <p class="about-version">Version <span id="aboutVersion">…</span></p>
+          <p class="about-credit">
+            Created with
+            <svg class="heart" width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
+            by <a href="https://www.jpitsingapore.com/" target="_blank" rel="noopener">JP IT Services Pte. Ltd.</a>
+          </p>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

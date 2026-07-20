@@ -1,0 +1,41 @@
+{
+  "manifest_version": 2,
+  "name": "Proxy Manager",
+  "version": "1.9.6",
+  "description": "Manage and switch between multiple proxy servers with ease.",
+  "author": "JP IT Services Pte. Ltd.",
+  "homepage_url": "https://www.jpitsingapore.com/",
+  "permissions": [
+    "proxy",
+    "storage",
+    "downloads",
+    "webRequest",
+    "webRequestBlocking",
+    "<all_urls>"
+  ],
+  "background": {
+    "scripts": ["background.js"],
+    "persistent": true
+  },
+  "browser_action": {
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "48": "icons/icon-48.png"
+    },
+    "default_title": "Proxy Manager"
+  },
+  "icons": {
+    "48": "icons/icon-48.png",
+    "96": "icons/icon-96.png",
+    "128": "icons/icon-128.png"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "proxy-manager@local.dev",
+      "strict_min_version": "140.0",
+      "data_collection_permissions": {
+        "required": ["none"]
+      }
+    }
+  }
+}
