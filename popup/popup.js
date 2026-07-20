@@ -54,6 +54,7 @@ const importBtn = $('importBtn');
 const importFile = $('importFile');
 const dropZone = $('dropZone');
 const settingsMsg = $('settingsMsg');
+const themeSeg = $('themeSeg');
 
 const fName = $('fName');
 const fHost = $('fHost');
@@ -67,6 +68,19 @@ let state = { proxies: [], selectedId: 'direct' };
 let currentType = 'http';
 let selectedColor = PALETTE[0];
 let editingId = null; // null = adding a new proxy, otherwise id being edited
+
+// Color scheme preference: 'system' | 'light' | 'dark'. 'system' is
+// resolved through the OS preference and followed live.
+let themePreference = 'system';
+const themeMedia = window.matchMedia('(prefers-color-scheme: light)');
+
+function applyThemeMode() {
+  const resolved = themePreference === 'system'
+    ? (themeMedia.matches ? 'light' : 'dark')
+    : themePreference;
+  document.documentElement.dataset.theme = resolved;
+  updateStatus(); // recompute accent colors against the new base theme
+}
 
 const uid = () => 'p_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 const plural = (n, word) => n + ' ' + word + (n === 1 ? '' : 's');
@@ -88,8 +102,14 @@ function svgNode(markup) {
 init();
 
 async function init() {
-  state = await browser.storage.local.get({ proxies: [], selectedId: 'direct' });
+  state = await browser.storage.local.get({ proxies: [], selectedId: 'direct', theme: 'system' });
   if (!Array.isArray(state.proxies)) state.proxies = [];
+
+  // Restore the saved color scheme preference.
+  themePreference = ['system', 'light', 'dark'].includes(state.theme) ? state.theme : 'system';
+  themeSeg.querySelectorAll('button').forEach(b => {
+    b.classList.toggle('active', b.dataset.theme === themePreference);
+  });
 
   // One-time migration: assign identity colors to proxies saved before
   // colors existed.
@@ -99,6 +119,7 @@ async function init() {
   });
   if (migrated) await browser.storage.local.set({ proxies: state.proxies });
 
+  applyThemeMode();
   renderList();
   bindEvents();
 }
@@ -117,6 +138,22 @@ function bindEvents() {
 
   typeSeg.querySelectorAll('button').forEach(btn => {
     btn.addEventListener('click', () => setType(btn.dataset.type));
+  });
+
+  themeSeg.querySelectorAll('button').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      themePreference = btn.dataset.theme;
+      themeSeg.querySelectorAll('button').forEach(b => {
+        b.classList.toggle('active', b === btn);
+      });
+      await browser.storage.local.set({ theme: themePreference });
+      applyThemeMode();
+    });
+  });
+
+  // Follow the OS color scheme while the preference is 'system'.
+  themeMedia.addEventListener('change', () => {
+    if (themePreference === 'system') applyThemeMode();
   });
 
   authToggle.addEventListener('change', () => {
@@ -239,7 +276,10 @@ function applyTheme(hex) {
   root.setProperty('--accent-softer', 'rgba(' + r + ',' + g + ',' + b + ',0.07)');
   root.setProperty('--accent-border', 'rgba(' + r + ',' + g + ',' + b + ',0.32)');
   root.setProperty('--accent-ring', 'rgba(' + r + ',' + g + ',' + b + ',0.16)');
-  root.setProperty('--accent-text', hslToHex(h, Math.min(s, 85), 74));
+  // Accent-colored text must stay readable on the base theme: bright on
+  // dark surfaces, deep on light ones.
+  const lightMode = document.documentElement.dataset.theme === 'light';
+  root.setProperty('--accent-text', hslToHex(h, Math.min(s, 85), lightMode ? 38 : 74));
   root.setProperty('--on-accent', luminance > 150 ? '#221d10' : '#ffffff');
 }
 

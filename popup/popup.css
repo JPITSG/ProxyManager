@@ -28,6 +28,50 @@
   color-scheme: dark;
 }
 
+/* --- light theme -----------------------------------------------------------
+   Same layout, only the color scheme changes. Accent variables are still
+   derived from the active proxy color by JS; this block restyles the neutral
+   surfaces and every hardcoded-for-dark value below. */
+:root[data-theme="light"] {
+  --bg: #eef1f6;
+  --card: #ffffff;
+  --card-hover: #f0f3f9;
+  --input-bg: #f4f6fa;
+  --border: rgba(18, 26, 38, 0.1);
+  --text: #1d2634;
+  --muted: #68727f;
+  color-scheme: light;
+}
+:root[data-theme="light"] #proxyList,
+:root[data-theme="light"] #formScroll { scrollbar-color: #c2cad7 transparent; }
+:root[data-theme="light"] #proxyList::-webkit-scrollbar-thumb,
+:root[data-theme="light"] #formScroll::-webkit-scrollbar-thumb { background: #c2cad7; }
+:root[data-theme="light"] .proxy-card:hover { border-color: rgba(18, 26, 38, 0.18); }
+:root[data-theme="light"] .proxy-card.selected { box-shadow: 0 3px 12px rgba(18, 26, 38, 0.14); }
+:root[data-theme="light"] .radio { border-color: #b9c1d0; }
+:root[data-theme="light"] .type-badge.direct { background: rgba(18, 26, 38, 0.07); }
+:root[data-theme="light"] .btn-ghost:hover {
+  border-color: rgba(18, 26, 38, 0.22);
+  background: rgba(18, 26, 38, 0.04);
+}
+:root[data-theme="light"] .icon-btn { background: rgba(18, 26, 38, 0.05); }
+:root[data-theme="light"] .icon-btn:hover { background: rgba(18, 26, 38, 0.1); }
+:root[data-theme="light"] .field input::placeholder { color: #9aa4b3; }
+:root[data-theme="light"] .swatch { border-color: rgba(18, 26, 38, 0.18); }
+:root[data-theme="light"] .swatch:hover { border-color: rgba(18, 26, 38, 0.4); }
+:root[data-theme="light"] .swatch.active {
+  border-color: #2b3446;
+  box-shadow: 0 0 0 3px rgba(18, 26, 38, 0.15);
+}
+:root[data-theme="light"] .segmented button:hover { border-color: rgba(18, 26, 38, 0.2); }
+:root[data-theme="light"] .slider { background: #ccd4e0; }
+:root[data-theme="light"] .status-dot {
+  background: #b4bcc9;
+  box-shadow: 0 0 0 4px rgba(18, 26, 38, 0.06);
+}
+:root[data-theme="light"] .logo-tile { fill: #ffffff; }
+:root[data-theme="light"] .drop-zone { border-color: rgba(18, 26, 38, 0.18); }
+
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 [hidden] { display: none !important; }
@@ -508,6 +552,7 @@ button:focus-visible { outline: 2px solid var(--accent1); outline-offset: 2px; }
 }
 
 .segmented { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.theme-seg { grid-template-columns: repeat(3, 1fr); margin-bottom: 14px; }
 .segmented button {
   padding: 8px 0;
   background: var(--input-bg);
