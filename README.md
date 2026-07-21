@@ -30,23 +30,34 @@ between them — or back to a direct connection — from the toolbar popup.
 
 - Firefox **140 or later** (desktop).
 
-## Install
-
-- **From the signed package:** download `proxy-manager.xpi`, then
-  `about:addons` → gear icon → *Install Add-on From File…*
-- **For development:** `about:debugging` → *This Firefox* →
-  *Load Temporary Add-on…* → select `manifest.json` from this directory.
-
 ## Build from source
 
-The package is a plain zip of the extension directory (also what
-CI/release tooling should produce):
+There is no bundled xpi — you build the package yourself. It is a plain
+zip of the extension directory:
 
 ```sh
 zip -q -r -X proxy-manager.xpi background.js icons LICENSE manifest.json popup
 ```
 
 The built xpi is intentionally not tracked in git (see `.gitignore`).
+
+## Install
+
+- **Temporary (any Firefox, no build needed):** `about:debugging` →
+  *This Firefox* → *Load Temporary Add-on…* → select `manifest.json`
+  from this directory. Lasts until Firefox restarts.
+- **Permanent:** Firefox only installs signed packages, so sign your own
+  build through AMO's self-distribution channel (free, unlisted, no
+  review) using API credentials from
+  <https://addons.mozilla.org/developers/addon/api/key/>:
+
+  ```sh
+  npx web-ext sign --channel unlisted \
+    --api-key <your-amo-issuer> --api-secret <your-amo-secret>
+  ```
+
+  then `about:addons` → gear icon → *Install Add-on From File…* and pick
+  the signed xpi from `web-ext-artifacts/`.
 
 ## Project layout
 
