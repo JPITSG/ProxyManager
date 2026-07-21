@@ -1,0 +1,16 @@
+# Built package — rebuild from source (see README.md)
+proxy-manager.xpi
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# Tooling / dependency directories (if introduced later)
+node_modules/
+
+# Signing workflow — credentials, signed artifacts, local runbook
+.amo-credentials
+web-ext-artifacts/
+AGENTS.md
