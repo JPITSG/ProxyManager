@@ -12,5 +12,6 @@ node_modules/
 
 # Signing workflow — credentials, signed artifacts, local runbook
 .amo-credentials
+.amo-upload-uuid
 web-ext-artifacts/
 AGENTS.md
