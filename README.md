@@ -14,6 +14,9 @@ between them — or back to a direct connection — from the toolbar popup.
 - **Authentication** — optional per-profile username/password, passed
   inline and answered automatically on HTTP 407 proxy auth challenges.
 - **DNS control** — optional remote DNS resolution for SOCKS profiles.
+- **LAN bypass** — optional per-profile switch to connect to local network
+  hosts directly (loopback, private/link-local addresses, dotless and
+  `.local` names), for both HTTP and HTTPS traffic.
 - **Persistent profile** — mark one profile to be re-selected
   automatically at browser startup; otherwise the last used selection
   applies.

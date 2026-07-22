@@ -62,6 +62,7 @@ const fPort = $('fPort');
 const fUser = $('fUser');
 const fPass = $('fPass');
 const fDns = $('fDns');
+const fBypassLan = $('fBypassLan');
 const fPersistent = $('fPersistent');
 
 let state = { proxies: [], selectedId: 'direct' };
@@ -468,6 +469,7 @@ function startEdit(id) {
   fUser.value = p.username || '';
   fPass.value = p.password || '';
   fDns.checked = Boolean(p.proxyDNS);
+  fBypassLan.checked = Boolean(p.bypassLan);
   fPersistent.checked = Boolean(p.persistent);
 
   showView(formView);
@@ -495,6 +497,7 @@ function readForm() {
     port,
     color: selectedColor,
     proxyDNS: (currentType === 'socks' || currentType === 'socks4') ? fDns.checked : false,
+    bypassLan: fBypassLan.checked,
     persistent: fPersistent.checked,
   };
 
@@ -727,6 +730,7 @@ function sanitizeProxy(raw) {
     port,
     color: typeof raw.color === 'string' && /^#[0-9a-f]{6}$/i.test(raw.color) ? raw.color : null,
     proxyDNS: Boolean(raw.proxyDNS),
+    bypassLan: Boolean(raw.bypassLan),
     persistent: Boolean(raw.persistent),
   };
   if (typeof raw.username === 'string' && raw.username) {

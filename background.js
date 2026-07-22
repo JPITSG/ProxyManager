@@ -10,7 +10,7 @@
  * Storage schema (browser.storage.local):
  * {
  *   schemaVersion: 1,
- *   proxies: [{ id, name, type, host, port, color?, username?, password?, proxyDNS, persistent? }],
+ *   proxies: [{ id, name, type, host, port, color?, username?, password?, proxyDNS, bypassLan?, persistent? }],
  *   selectedId: 'direct' | <proxy id>
  * }
  */
@@ -70,6 +70,45 @@ function buildProxyInfo(proxy) {
   return info;
 }
 
+// --- LAN bypass ---------------------------------------------------------------
+// A proxy flagged `bypassLan` only handles public traffic; requests to LAN
+// destinations go direct regardless of scheme (http and https alike).
+
+function isPrivateIPv4(h) {
+  const parts = h.split('.');
+  if (parts.length !== 4) return false;
+  const nums = parts.map(p => (/^\d{1,3}$/.test(p) ? Number(p) : -1));
+  if (nums.some(n => n < 0 || n > 255)) return false;
+  const a = nums[0];
+  const b = nums[1];
+  return a === 10 || a === 127 ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 169 && b === 254);
+}
+
+function isLanHost(host) {
+  const h = String(host || '').toLowerCase().replace(/\.$/, '');
+  if (!h) return false;
+  if (h === 'localhost' || h.endsWith('.localhost')) return true;
+  if (h.endsWith('.local')) return true; // mDNS
+  if (h.startsWith('[') && h.endsWith(']')) {
+    // IPv6 literal: loopback, unique-local (fc00::/7), link-local (fe80::/10)
+    const v6 = h.slice(1, -1);
+    return v6 === '::1' || /^f[cd]/.test(v6) || /^fe[89ab]/.test(v6);
+  }
+  if (!h.includes('.')) return true; // dotless intranet name
+  return isPrivateIPv4(h);
+}
+
+function isLanUrl(url) {
+  try {
+    return isLanHost(new URL(url).hostname);
+  } catch (err) {
+    return false;
+  }
+}
+
 browser.proxy.onRequest.addListener(
   async details => {
     // Wait for startup state so the very first requests after browser
@@ -82,6 +121,9 @@ browser.proxy.onRequest.addListener(
     // Future expansion point: per-domain routing rules / failover chains
     // can be decided here using `details.url`.
     const proxy = getSelectedProxy();
+    if (proxy && proxy.bypassLan && isLanUrl(details.url)) {
+      return { type: 'direct' };
+    }
     return proxy ? buildProxyInfo(proxy) : { type: 'direct' };
   },
   { urls: ['<all_urls>'] }
