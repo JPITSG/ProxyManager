@@ -48,6 +48,7 @@
 :root[data-theme="light"] #formScroll::-webkit-scrollbar-thumb { background: #c2cad7; }
 :root[data-theme="light"] .proxy-card:hover { border-color: rgba(18, 26, 38, 0.18); }
 :root[data-theme="light"] .proxy-card.selected { box-shadow: 0 3px 12px rgba(18, 26, 38, 0.14); }
+:root[data-theme="light"] #proxyList.reordering .proxy-card.dragging { box-shadow: 0 10px 24px rgba(18, 26, 38, 0.22); }
 :root[data-theme="light"] .radio { border-color: #b9c1d0; }
 :root[data-theme="light"] .type-badge.direct { background: rgba(18, 26, 38, 0.07); }
 :root[data-theme="light"] .btn-ghost:hover {
@@ -65,7 +66,7 @@
 }
 :root[data-theme="light"] .segmented button:hover { border-color: rgba(18, 26, 38, 0.2); }
 :root[data-theme="light"] .slider { background: #ccd4e0; }
-:root[data-theme="light"] .status-dot {
+:root[data-theme="light"] .status-dot:not(.on) {
   background: #b4bcc9;
   box-shadow: 0 0 0 4px rgba(18, 26, 38, 0.06);
 }
@@ -433,6 +434,32 @@ main { position: relative; z-index: 1; padding: 0 18px 18px; }
   border-color: rgba(255, 93, 115, 0.4);
 }
 
+/* --- drag to reorder --- */
+/* While a card is held, layout is frozen and every movement is a transform:
+   the held card follows the pointer 1:1 with a lift shadow, the others
+   slide aside with a transition. */
+
+#proxyList.reordering {
+  cursor: grabbing;
+  user-select: none;
+}
+#proxyList.reordering .proxy-card {
+  transition: transform 0.18s ease;
+  cursor: grabbing;
+}
+/* no hover reactions from cards sliding beneath the held one */
+#proxyList.reordering .proxy-card:not(.dragging) { pointer-events: none; }
+#proxyList.reordering .proxy-card.dragging {
+  z-index: 5;
+  transition: none;
+  background: var(--card-hover);
+  border-color: var(--accent-border);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.45);
+}
+#proxyList.reordering .proxy-card.dragging::before { opacity: 1; }
+/* the drop: one short transform transition into the landing slot */
+#proxyList.reordering .proxy-card.dragging.drop-anim { transition: transform 0.16s ease; }
+
 /* --- empty state --- */
 
 .empty { text-align: center; padding: 26px 0 18px; color: var(--muted); }
@@ -534,7 +561,8 @@ button:focus-visible { outline: 2px solid var(--accent1); outline-offset: 2px; }
 /* color swatches — flex-grown to span the full row width with no dead
    space after the last one; squares via aspect-ratio. Automatically
    re-sizes when the scrollbar lane opens/closes. */
-.swatches { display: flex; flex-wrap: nowrap; gap: 8px; padding: 2px 0; }
+/* 3px side padding keeps the active glow inside #formScroll's clip edge */
+.swatches { display: flex; flex-wrap: nowrap; gap: 8px; padding: 2px 3px; }
 .swatch {
   flex: 1 1 0;
   min-width: 0;
@@ -614,6 +642,97 @@ button:focus-visible { outline: 2px solid var(--accent1); outline-offset: 2px; }
 .collapsible { display: none; }
 .collapsible.open { display: block; animation: fadeSlide 0.25s ease; }
 @keyframes fadeSlide { from { opacity: 0; transform: translateY(-6px); } }
+
+/* --- bypass rules --- */
+
+.bypass-header { cursor: pointer; user-select: none; }
+.bypass-header:hover { border-color: rgba(255, 255, 255, 0.16); }
+.bypass-header:focus-visible { outline: 2px solid var(--accent1); outline-offset: 2px; }
+
+.chevron {
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  flex-shrink: 0;
+  transition: transform 0.2s;
+}
+.chevron.open { transform: rotate(180deg); }
+
+#bypassFields { margin-bottom: 10px; }
+
+.bypass-rule { display: flex; gap: 6px; margin-bottom: 6px; }
+.bypass-rule input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 11px;
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--text);
+  font-size: 12px;
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  outline: none;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.bypass-rule input::placeholder { color: #4c5262; }
+.bypass-rule input:focus {
+  border-color: var(--accent1);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+.bypass-rule input.invalid { border-color: rgba(255, 93, 115, 0.55); }
+.bypass-rule input.invalid:focus { box-shadow: 0 0 0 3px rgba(255, 93, 115, 0.15); }
+
+.rule-remove {
+  display: grid;
+  place-items: center;
+  width: 31px;
+  flex-shrink: 0;
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 0.18s, background 0.18s, border-color 0.18s;
+}
+.rule-remove:hover {
+  color: var(--danger);
+  background: rgba(255, 93, 115, 0.1);
+  border-color: rgba(255, 93, 115, 0.4);
+}
+
+.bypass-empty {
+  padding: 12px 10px;
+  margin-bottom: 6px;
+  border: 1.5px dashed rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--muted);
+}
+.bypass-examples {
+  margin-top: 5px;
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 10px;
+  opacity: 0.75;
+}
+
+.bypass-footer { display: flex; gap: 6px; align-items: stretch; }
+
+.btn-add-rule {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px;
+  font-size: 12px;
+}
+
+.bypass-info { width: 31px; height: auto; flex-shrink: 0; }
+
+:root[data-theme="light"] .bypass-rule input::placeholder { color: #9aa4b3; }
+:root[data-theme="light"] .bypass-header:hover { border-color: rgba(18, 26, 38, 0.2); }
+:root[data-theme="light"] .bypass-empty { border-color: rgba(18, 26, 38, 0.16); }
 
 /* --- test connection --- */
 
@@ -766,18 +885,25 @@ button:focus-visible { outline: 2px solid var(--accent1); outline-offset: 2px; }
   font-size: 11.5px;
   color: var(--muted);
 }
+.about-source {
+  margin-top: 3px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
 .about-credit .heart {
   color: #ff5d73;
   vertical-align: -1px;
   margin: 0 1px;
 }
-.about-credit a {
+.about-credit a,
+.about-source a {
   color: var(--accent-text);
   text-decoration: none;
   border-bottom: 1px solid transparent;
   transition: border-color 0.2s, color 0.2s;
 }
-.about-credit a:hover {
+.about-credit a:hover,
+.about-source a:hover {
   color: var(--accent1);
   border-bottom-color: var(--accent1);
 }

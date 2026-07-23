@@ -138,6 +138,33 @@
               </label>
             </div>
 
+            <div class="toggle-row bypass-header" id="bypassHeader" role="button" tabindex="0" aria-expanded="false">
+              <div>
+                <div class="label">Don't Use This Proxy For</div>
+                <div class="hint" id="bypassHint">Matching URLs connect directly</div>
+              </div>
+              <span class="chevron" id="bypassChevron">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+              </span>
+            </div>
+
+            <div id="bypassFields" class="collapsible">
+              <div id="bypassRules"></div>
+              <div class="bypass-empty" id="bypassEmpty">
+                <div>No bypass rules — all traffic uses this proxy.</div>
+                <div class="bypass-examples">e.g. *.example.com &middot; localhost:8080 &middot; https://*.corp.com/admin*</div>
+              </div>
+              <div class="bypass-footer">
+                <button type="button" class="btn-ghost btn-add-rule" id="addRuleBtn">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+                  Add rule
+                </button>
+                <button type="button" class="icon-btn bypass-info" title="Pattern syntax: scheme://host:port/path?query — every part is optional, * matches anything, omitted parts match all.&#10;Examples: *.example.com &middot; localhost:8080 &middot; https://*.corp.com/admin*">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                </button>
+              </div>
+            </div>
+
             <div class="toggle-row">
               <div>
                 <div class="label">Persistent</div>
@@ -210,10 +237,14 @@
             <svg class="heart" width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
             by <a href="https://www.jpitsingapore.com/" target="_blank" rel="noopener">JP IT Services Pte. Ltd.</a>
           </p>
+          <p class="about-source">
+            Code base available at <a href="https://github.com/JPITSG/ProxyManager" target="_blank" rel="noopener">github.com/JPITSG/ProxyManager</a>
+          </p>
         </div>
       </section>
     </main>
   </div>
+  <script src="../bypass.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

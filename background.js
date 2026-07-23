@@ -10,7 +10,7 @@
  * Storage schema (browser.storage.local):
  * {
  *   schemaVersion: 1,
- *   proxies: [{ id, name, type, host, port, color?, username?, password?, proxyDNS, bypassLan?, persistent? }],
+ *   proxies: [{ id, name, type, host, port, color?, username?, password?, proxyDNS, bypassLan?, bypass?, persistent? }],
  *   selectedId: 'direct' | <proxy id>
  * }
  */
@@ -109,6 +109,25 @@ function isLanUrl(url) {
   }
 }
 
+// --- Bypass rules -----------------------------------------------------------
+// A proxy may carry a list of URL patterns (grammar in bypass.js) whose
+// requests connect directly. Patterns are compiled once per version of the
+// proxies array and cached, so the per-request listener only runs regexes.
+
+let bypassCache = { proxies: null, map: new Map() };
+
+function getBypassRules(proxy) {
+  if (bypassCache.proxies !== state.proxies) {
+    const map = new Map();
+    state.proxies.forEach(p => {
+      const rules = Bypass.compileRules(p.bypass);
+      if (rules.length) map.set(p.id, rules);
+    });
+    bypassCache = { proxies: state.proxies, map };
+  }
+  return bypassCache.map.get(proxy.id) || null;
+}
+
 browser.proxy.onRequest.addListener(
   async details => {
     // Wait for startup state so the very first requests after browser
@@ -118,11 +137,11 @@ browser.proxy.onRequest.addListener(
       return buildProxyInfo(testRoute.proxy);
     }
 
-    // Future expansion point: per-domain routing rules / failover chains
-    // can be decided here using `details.url`.
     const proxy = getSelectedProxy();
-    if (proxy && proxy.bypassLan && isLanUrl(details.url)) {
-      return { type: 'direct' };
+    if (proxy) {
+      if (proxy.bypassLan && isLanUrl(details.url)) return { type: 'direct' };
+      const rules = getBypassRules(proxy);
+      if (rules && Bypass.matchUrl(rules, details.url)) return { type: 'direct' };
     }
     return proxy ? buildProxyInfo(proxy) : { type: 'direct' };
   },

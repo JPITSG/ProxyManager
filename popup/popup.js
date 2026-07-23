@@ -21,6 +21,8 @@ const ZAP_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" 
 
 const CHECK_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>';
 
+const X_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M18 6L6 18"/><path d="M6 6l12 12"/></svg>';
+
 const $ = id => document.getElementById(id);
 
 const listView = $('listView');
@@ -64,6 +66,14 @@ const fPass = $('fPass');
 const fDns = $('fDns');
 const fBypassLan = $('fBypassLan');
 const fPersistent = $('fPersistent');
+
+const bypassHeader = $('bypassHeader');
+const bypassChevron = $('bypassChevron');
+const bypassFields = $('bypassFields');
+const bypassRules = $('bypassRules');
+const bypassHint = $('bypassHint');
+const bypassEmpty = $('bypassEmpty');
+const addRuleBtn = $('addRuleBtn');
 
 let state = { proxies: [], selectedId: 'direct' };
 let currentType = 'http';
@@ -159,6 +169,18 @@ function bindEvents() {
 
   authToggle.addEventListener('change', () => {
     authFields.classList.toggle('open', authToggle.checked);
+    updateScrollLanes();
+  });
+
+  bypassHeader.addEventListener('click', () => setBypassOpen(!isBypassOpen()));
+  bypassHeader.addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      setBypassOpen(!isBypassOpen());
+    }
+  });
+  addRuleBtn.addEventListener('click', () => {
+    addRuleRow('').focus();
     updateScrollLanes();
   });
 
@@ -286,7 +308,7 @@ function applyTheme(hex) {
 
 // --- Rendering --------------------------------------------------------------
 
-function renderList() {
+function renderList(opts) {
   proxyList.replaceChildren();
   proxyList.appendChild(makeDirectCard());
 
@@ -299,6 +321,13 @@ function renderList() {
   }
 
   state.proxies.forEach((p, i) => proxyList.appendChild(makeCard(p, i)));
+
+  // A render straight after a reorder keeps the list still instead of
+  // replaying the entry animation.
+  if (opts && opts.animate === false) {
+    proxyList.querySelectorAll('.proxy-card').forEach(c => { c.style.animation = 'none'; });
+  }
+
   updateStatus();
   updateScrollLanes();
 }
@@ -329,6 +358,7 @@ function makeDirectCard() {
 function makeCard(p, index) {
   const card = h('div', 'proxy-card');
   card.tabIndex = 0;
+  card.dataset.index = index;
   card.style.animationDelay = (index * 30) + 'ms';
   card.style.setProperty('--pc', p.color || PALETTE[0]);
   if (p.id === state.selectedId) card.classList.add('selected');
@@ -360,10 +390,16 @@ function makeCard(p, index) {
 
   card.appendChild(actions);
 
-  card.addEventListener('click', () => selectProxy(p.id));
+  card.addEventListener('click', () => { if (!suppressClick) selectProxy(p.id); });
+  card.addEventListener('pointerdown', e => onCardPointerDown(e, card, index));
   card.addEventListener('keydown', e => {
     if (e.target !== card) return;
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectProxy(p.id); }
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault(); selectProxy(p.id);
+    } else if ((e.ctrlKey || e.altKey) && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+      e.preventDefault();
+      moveProxy(index, index + (e.key === 'ArrowDown' ? 1 : -1), { refocus: true });
+    }
   });
   return card;
 }
@@ -397,6 +433,175 @@ async function removeProxy(id) {
   renderList();
 }
 
+// Moves the proxy at `from` to position `to` and stores the new order.
+async function moveProxy(from, to, opts) {
+  if (to === from || to < 0 || to >= state.proxies.length) return;
+  const [moved] = state.proxies.splice(from, 1);
+  state.proxies.splice(to, 0, moved);
+  await browser.storage.local.set({ proxies: state.proxies });
+  renderList({ animate: false });
+  if (opts && opts.refocus) {
+    const el = proxyList.querySelector('.proxy-card[data-index="' + to + '"]');
+    if (el) el.focus();
+  }
+}
+
+// --- Drag to reorder ---------------------------------------------------------
+// Proxy cards are reordered by press-hold-drag: once a pointer that went down
+// on a card travels a few pixels vertically, the card lifts and follows the
+// pointer while the other cards slide out of the way; the new order is stored
+// on drop. Geometry measured at lift stays valid for the whole drag because
+// layout is frozen — cards only move via transforms. The Direct Connection
+// card is not part of the stored list and stays fixed at the top.
+
+const DRAG_THRESHOLD = 6;    // px of vertical travel that turns a press into a drag
+const AUTOSCROLL_ZONE = 32;  // px from the list edge where auto-scroll kicks in
+const AUTOSCROLL_MAX = 9;    // px per frame at full tilt
+
+let drag = null;             // active drag session; null when idle
+let suppressClick = false;   // swallows the click a finished drag fires
+
+function onCardPointerDown(e, card, index) {
+  if (drag || e.button !== 0 || state.proxies.length < 2) return;
+  if (e.target.closest('.card-actions')) return; // edit / delete buttons
+  drag = {
+    card,
+    index,
+    toIndex: index,
+    pointerId: e.pointerId,
+    startY: e.clientY,
+    lastY: e.clientY,
+    startScrollTop: proxyList.scrollTop,
+    items: null, // per-card geometry, measured at lift
+    slot: 0,     // distance between consecutive card tops
+    minDy: 0,
+    maxDy: 0,
+    active: false,
+    raf: 0,
+  };
+  window.addEventListener('pointermove', onDragMove);
+  window.addEventListener('pointerup', onDragEnd);
+  window.addEventListener('pointercancel', onDragCancel);
+}
+
+function liftCard() {
+  const d = drag;
+  d.active = true;
+  try { d.card.setPointerCapture(d.pointerId); } catch (err) { /* drag still works */ }
+
+  // Content-coordinate box of every proxy card (scroll-independent).
+  const listRect = proxyList.getBoundingClientRect();
+  d.items = [...proxyList.querySelectorAll('.proxy-card[data-index]')].map(el => {
+    const r = el.getBoundingClientRect();
+    return { el, top: r.top - listRect.top + proxyList.scrollTop, height: r.height };
+  });
+  const me = d.items[d.index];
+  d.slot = d.items.length > 1 ? d.items[1].top - d.items[0].top : me.height;
+  d.minDy = d.items[0].top - me.top;
+  d.maxDy = d.items[d.items.length - 1].top - me.top;
+
+  proxyList.classList.add('reordering');
+  d.card.classList.add('dragging');
+  d.raf = requestAnimationFrame(dragFrame);
+}
+
+function onDragMove(e) {
+  const d = drag;
+  if (!d || e.pointerId !== d.pointerId) return;
+  d.lastY = e.clientY;
+  if (!d.active) {
+    if (Math.abs(e.clientY - d.startY) < DRAG_THRESHOLD) return;
+    liftCard();
+  }
+  updateDrag();
+}
+
+function updateDrag() {
+  const d = drag;
+  const scrolled = proxyList.scrollTop - d.startScrollTop;
+  const dy = Math.min(d.maxDy, Math.max(d.minDy, (d.lastY - d.startY) + scrolled));
+  d.card.style.transform = 'translateY(' + dy + 'px)';
+
+  const me = d.items[d.index];
+
+  // Landing index = the slot nearest to the card's current position, so
+  // cards swap as soon as the drag crosses a slot boundary (half a slot).
+  const to = Math.max(0, Math.min(d.items.length - 1,
+    Math.round((me.top + dy - d.items[0].top) / d.slot)));
+  d.toIndex = to;
+
+  // Cards between the old and new position step one slot toward the hole.
+  d.items.forEach((it, i) => {
+    if (i === d.index) return;
+    let shift = 0;
+    if (i > d.index && i <= to) shift = -d.slot;
+    else if (i < d.index && i >= to) shift = d.slot;
+    it.el.style.transform = shift ? 'translateY(' + shift + 'px)' : '';
+  });
+}
+
+// Scrolls the list while the pointer sits near its top/bottom edge, so long
+// lists can be reordered end to end in a single drag.
+function dragFrame() {
+  const d = drag;
+  if (!d || !d.active) return;
+  const rect = proxyList.getBoundingClientRect();
+  let v = 0;
+  if (d.lastY < rect.top + AUTOSCROLL_ZONE) {
+    v = -Math.min(AUTOSCROLL_MAX, Math.ceil((rect.top + AUTOSCROLL_ZONE - d.lastY) / 6));
+  } else if (d.lastY > rect.bottom - AUTOSCROLL_ZONE) {
+    v = Math.min(AUTOSCROLL_MAX, Math.ceil((d.lastY - (rect.bottom - AUTOSCROLL_ZONE)) / 6));
+  }
+  if (v) {
+    const before = proxyList.scrollTop;
+    proxyList.scrollTop = before + v;
+    if (proxyList.scrollTop !== before) updateDrag();
+  }
+  d.raf = requestAnimationFrame(dragFrame);
+}
+
+function removeDragListeners() {
+  window.removeEventListener('pointermove', onDragMove);
+  window.removeEventListener('pointerup', onDragEnd);
+  window.removeEventListener('pointercancel', onDragCancel);
+}
+
+function onDragEnd(e) {
+  const d = drag;
+  if (!d || e.pointerId !== d.pointerId) return;
+  removeDragListeners();
+  if (!d.active) { drag = null; return; } // plain click — let it through
+
+  cancelAnimationFrame(d.raf);
+  suppressClick = true; // a click on the card follows this pointerup
+
+  // Snap into the landing slot, then persist and re-render.
+  d.card.classList.add('drop-anim');
+  d.card.style.transform = 'translateY(' + ((d.toIndex - d.index) * d.slot) + 'px)';
+  setTimeout(() => commitDrag(d), 200);
+}
+
+function onDragCancel(e) {
+  const d = drag;
+  if (!d || e.pointerId !== d.pointerId) return;
+  removeDragListeners();
+  if (!d.active) { drag = null; return; }
+
+  cancelAnimationFrame(d.raf);
+  d.toIndex = d.index; // aborted: snap back to where it came from
+  d.card.classList.add('drop-anim');
+  d.card.style.transform = '';
+  setTimeout(() => commitDrag(d), 200);
+}
+
+async function commitDrag(d) {
+  proxyList.classList.remove('reordering');
+  if (d.toIndex !== d.index) await moveProxy(d.index, d.toIndex);
+  else renderList({ animate: false });
+  drag = null;
+  suppressClick = false;
+}
+
 // --- Form -------------------------------------------------------------------
 
 function setType(type) {
@@ -425,6 +630,78 @@ function renderSwatches() {
   });
 }
 
+// --- Bypass rules -------------------------------------------------------------
+// Per-proxy list of URL patterns that connect directly (grammar in
+// bypass.js, shared with the background router). The section header expands
+// like the Authentication collapsible. An invalid pattern is tinted but
+// saved anyway — it simply never matches anything.
+
+const isBypassOpen = () => bypassFields.classList.contains('open');
+
+function setBypassOpen(open) {
+  bypassFields.classList.toggle('open', open);
+  bypassChevron.classList.toggle('open', open);
+  bypassHeader.setAttribute('aria-expanded', String(open));
+  updateScrollLanes();
+}
+
+// The rule count shows in the collapsed header, so a configured proxy is
+// recognizable without opening the section.
+function updateBypassHint() {
+  const n = readRuleInputs().length;
+  bypassHint.textContent = n
+    ? plural(n, 'rule') + ' — matching URLs connect directly'
+    : 'Matching URLs connect directly';
+}
+
+// While the rule list is empty, an example block stands in for it.
+function updateBypassEmpty() {
+  bypassEmpty.hidden = bypassRules.children.length > 0;
+}
+
+function readRuleInputs() {
+  return [...bypassRules.querySelectorAll('input')]
+    .map(el => el.value.trim())
+    .filter(Boolean);
+}
+
+function validateRuleInput(input) {
+  const v = input.value.trim();
+  input.classList.toggle('invalid', Boolean(v) && !Bypass.compileRule(v));
+}
+
+function addRuleRow(value) {
+  const row = h('div', 'bypass-rule');
+
+  const input = h('input');
+  input.type = 'text';
+  input.placeholder = '*.example.com';
+  input.spellcheck = false;
+  input.value = value || '';
+  input.addEventListener('input', () => {
+    validateRuleInput(input);
+    updateBypassHint();
+  });
+
+  const remove = h('button', 'rule-remove');
+  remove.type = 'button';
+  remove.title = 'Remove rule';
+  remove.appendChild(svgNode(X_SVG));
+  remove.addEventListener('click', () => {
+    row.remove();
+    updateBypassHint();
+    updateBypassEmpty();
+    updateScrollLanes();
+  });
+
+  row.appendChild(input);
+  row.appendChild(remove);
+  bypassRules.appendChild(row);
+  updateBypassEmpty();
+  validateRuleInput(input);
+  return input;
+}
+
 function resetForm() {
   editingId = null;
   proxyForm.reset();
@@ -441,6 +718,10 @@ function resetForm() {
   renderSwatches();
   authFields.classList.remove('open');
   fDns.checked = true;
+  bypassRules.replaceChildren();
+  setBypassOpen(false);
+  updateBypassHint();
+  updateBypassEmpty();
 }
 
 function startEdit(id) {
@@ -472,6 +753,12 @@ function startEdit(id) {
   fBypassLan.checked = Boolean(p.bypassLan);
   fPersistent.checked = Boolean(p.persistent);
 
+  bypassRules.replaceChildren();
+  (Array.isArray(p.bypass) ? p.bypass : []).forEach(rule => addRuleRow(rule));
+  setBypassOpen(bypassRules.children.length > 0);
+  updateBypassHint();
+  updateBypassEmpty();
+
   showView(formView);
   fName.focus();
 }
@@ -498,6 +785,7 @@ function readForm() {
     color: selectedColor,
     proxyDNS: (currentType === 'socks' || currentType === 'socks4') ? fDns.checked : false,
     bypassLan: fBypassLan.checked,
+    bypass: readRuleInputs(),
     persistent: fPersistent.checked,
   };
 
@@ -731,6 +1019,9 @@ function sanitizeProxy(raw) {
     color: typeof raw.color === 'string' && /^#[0-9a-f]{6}$/i.test(raw.color) ? raw.color : null,
     proxyDNS: Boolean(raw.proxyDNS),
     bypassLan: Boolean(raw.bypassLan),
+    bypass: Array.isArray(raw.bypass)
+      ? raw.bypass.filter(s => typeof s === 'string' && s.trim()).map(s => s.trim())
+      : [],
     persistent: Boolean(raw.persistent),
   };
   if (typeof raw.username === 'string' && raw.username) {
