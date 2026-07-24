@@ -412,9 +412,17 @@ function applyTheme(hex) {
 
 // --- Rendering --------------------------------------------------------------
 
-function renderList(opts) {
+// Ids currently on screen. Cards already in this set skip the entry
+// animation on the next render, so an edit, a delete or a reorder doesn't
+// replay the whole list and read as a rebuild.
+let shownIds = new Set();
+
+function renderList() {
+  const wasShown = shownIds;
+  shownIds = new Set(['direct', ...state.proxies.map(p => p.id)]);
+
   proxyList.replaceChildren();
-  proxyList.appendChild(makeDirectCard());
+  proxyList.appendChild(makeDirectCard(wasShown));
 
   if (state.proxies.length === 0) {
     const empty = h('div', 'empty');
@@ -424,21 +432,17 @@ function renderList(opts) {
     proxyList.appendChild(empty);
   }
 
-  state.proxies.forEach((p, i) => proxyList.appendChild(makeCard(p, i)));
-
-  // A render straight after a reorder keeps the list still instead of
-  // replaying the entry animation.
-  if (opts && opts.animate === false) {
-    proxyList.querySelectorAll('.proxy-card').forEach(c => { c.style.animation = 'none'; });
-  }
+  state.proxies.forEach((p, i) => proxyList.appendChild(makeCard(p, i, wasShown)));
 
   updateStatus();
   updateScrollLanes();
 }
 
-function makeDirectCard() {
+function makeDirectCard(wasShown) {
   const card = h('div', 'proxy-card');
   card.tabIndex = 0;
+  card.dataset.id = 'direct';
+  if (wasShown.has('direct')) card.style.animation = 'none';
   card.style.setProperty('--pc', DIRECT_THEME_COLOR);
   if (state.selectedId === 'direct') card.classList.add('selected');
   card.appendChild(h('div', 'radio'));
@@ -459,11 +463,13 @@ function makeDirectCard() {
   return card;
 }
 
-function makeCard(p, index) {
+function makeCard(p, index, wasShown) {
   const card = h('div', 'proxy-card');
   card.tabIndex = 0;
+  card.dataset.id = p.id;
   card.dataset.index = index;
-  card.style.animationDelay = (index * 30) + 'ms';
+  if (wasShown.has(p.id)) card.style.animation = 'none';
+  else card.style.animationDelay = (index * 30) + 'ms';
   card.style.setProperty('--pc', p.color || PALETTE[0]);
   if (p.id === state.selectedId) card.classList.add('selected');
   card.appendChild(h('div', 'radio'));
@@ -508,6 +514,16 @@ function makeCard(p, index) {
   return card;
 }
 
+// Switching proxies only moves the highlight: the cards stay put and play
+// their own transitions (background, border, the radio's pop) instead of
+// being thrown away and rebuilt.
+function markSelected() {
+  proxyList.querySelectorAll('.proxy-card').forEach(card => {
+    card.classList.toggle('selected', card.dataset.id === state.selectedId);
+  });
+  updateStatus();
+}
+
 function updateStatus() {
   const p = state.proxies.find(x => x.id === state.selectedId);
   const active = Boolean(p);
@@ -522,8 +538,8 @@ function updateStatus() {
 
 async function selectProxy(id) {
   state.selectedId = id;
+  markSelected(); // highlight first, so the click lands without waiting on storage
   await browser.storage.local.set({ selectedId: id });
-  renderList();
 }
 
 async function removeProxy(id) {
@@ -543,7 +559,7 @@ async function moveProxy(from, to, opts) {
   const [moved] = state.proxies.splice(from, 1);
   state.proxies.splice(to, 0, moved);
   await browser.storage.local.set({ proxies: state.proxies });
-  renderList({ animate: false });
+  renderList();
   if (opts && opts.refocus) {
     const el = proxyList.querySelector('.proxy-card[data-index="' + to + '"]');
     if (el) el.focus();
@@ -701,7 +717,7 @@ function onDragCancel(e) {
 async function commitDrag(d) {
   proxyList.classList.remove('reordering');
   if (d.toIndex !== d.index) await moveProxy(d.index, d.toIndex);
-  else renderList({ animate: false });
+  else renderList();
   drag = null;
   suppressClick = false;
 }
