@@ -208,6 +208,7 @@ function showView(view) {
   [listView, formView, settingsView].forEach(v => {
     v.classList.toggle('hidden', v !== view);
   });
+  closeTip(); // whatever it pointed at is on its way out
   updateScrollLanes();
 }
 
@@ -234,6 +235,109 @@ if (typeof ResizeObserver !== 'undefined') {
   const laneObserver = new ResizeObserver(updateScrollLanes);
   scrollLaneEls.forEach(el => laneObserver.observe(el));
 }
+
+// --- Tooltips ---------------------------------------------------------------
+// Styled stand-in for the browser's native title tooltips. Every element
+// carrying data-tip shares one floating chip: it opens above the target,
+// flips below when there is no room, and is clamped to the popup either way.
+// A newline in the text starts a muted continuation line. The native title
+// also gave icon-only buttons their accessible name, so setTip mirrors the
+// text into aria-label.
+
+const TIP_DELAY = 320;      // ms the pointer must rest on a target before it opens
+const TIP_GAP = 8;          // px between target and chip
+const TIP_EDGE = 8;         // px kept clear of the popup edges
+const TIP_ARROW_INSET = 14; // px the arrow keeps away from the chip's corners
+
+const tipEl = h('div', 'tooltip');
+tipEl.setAttribute('role', 'tooltip');
+tipEl.setAttribute('aria-hidden', 'true');
+document.body.appendChild(tipEl);
+
+let tipTarget = null; // element the chip is showing — or about to show — for
+let tipTimer = 0;
+
+function setTip(el, text) {
+  el.dataset.tip = text;
+  if (el.localName === 'button') el.setAttribute('aria-label', text);
+}
+
+// Triggers declared in the markup get the same treatment as scripted ones.
+document.querySelectorAll('[data-tip]').forEach(el => setTip(el, el.dataset.tip));
+
+function openTip(target, instant) {
+  if (target === tipTarget) return;
+  // Moving on while a chip is already up skips the delay, so sweeping along
+  // a row of icons doesn't stutter.
+  const wasOpen = tipEl.classList.contains('show');
+  closeTip();
+  tipTarget = target;
+  if (instant || wasOpen) drawTip();
+  else tipTimer = setTimeout(drawTip, TIP_DELAY);
+}
+
+function closeTip() {
+  clearTimeout(tipTimer);
+  tipTimer = 0;
+  tipTarget = null;
+  tipEl.classList.remove('show');
+}
+
+function drawTip() {
+  tipTimer = 0;
+  const target = tipTarget;
+  const text = target && target.isConnected ? target.dataset.tip : '';
+  if (!text) return closeTip();
+
+  tipEl.replaceChildren(...text.split('\n')
+    .map((line, i) => h('div', i ? 'tip-note' : null, line)));
+
+  // Measured from the popup's left edge: a fixed box shrinks to the space
+  // left of the viewport edge, so a stale position would skew its width.
+  // offset* sizes are pre-transform, unlike getBoundingClientRect.
+  tipEl.style.left = '0px';
+  tipEl.style.top = '0px';
+  const width = tipEl.offsetWidth;
+  const height = tipEl.offsetHeight;
+
+  const r = target.getBoundingClientRect();
+  const above = r.top - TIP_GAP - height >= TIP_EDGE;
+  const top = above
+    ? r.top - TIP_GAP - height
+    : Math.min(r.bottom + TIP_GAP, window.innerHeight - height - TIP_EDGE);
+  const center = r.left + r.width / 2;
+  const left = Math.max(TIP_EDGE,
+    Math.min(center - width / 2, window.innerWidth - width - TIP_EDGE));
+
+  tipEl.classList.toggle('below', !above);
+  tipEl.style.left = Math.round(left) + 'px';
+  tipEl.style.top = Math.round(Math.max(TIP_EDGE, top)) + 'px';
+  // The arrow tracks the target's center, short of the rounded corners.
+  tipEl.style.setProperty('--tip-arrow', Math.round(Math.min(
+    Math.max(center - left, TIP_ARROW_INSET), width - TIP_ARROW_INSET)) + 'px');
+  tipEl.classList.add('show');
+}
+
+const tipTriggerAt = node =>
+  node instanceof Element ? node.closest('[data-tip]') : null;
+
+document.addEventListener('mouseover', e => {
+  const target = tipTriggerAt(e.target);
+  if (target) openTip(target);
+  else closeTip();
+});
+
+// Keyboard focus shows the chip straight away; a click of any kind dismisses
+// it, which also covers targets that a click removes from the page.
+document.addEventListener('focusin', e => {
+  const target = tipTriggerAt(e.target);
+  if (target && target.matches(':focus-visible')) openTip(target, true);
+});
+document.addEventListener('focusout', closeTip);
+document.addEventListener('click', closeTip, true);
+document.documentElement.addEventListener('mouseleave', closeTip);
+window.addEventListener('blur', closeTip);
+scrollLaneEls.forEach(el => el.addEventListener('scroll', closeTip, { passive: true }));
 
 // --- Dynamic theme -------------------------------------------------------------
 // The whole accent (gradient, glows, focus rings, button text) derives from
@@ -376,14 +480,14 @@ function makeCard(p, index) {
 
   const edit = h('button', 'edit-btn');
   edit.type = 'button';
-  edit.title = 'Edit proxy';
+  setTip(edit, 'Edit proxy');
   edit.appendChild(svgNode(EDIT_SVG));
   edit.addEventListener('click', e => { e.stopPropagation(); startEdit(p.id); });
   actions.appendChild(edit);
 
   const del = h('button', 'delete-btn');
   del.type = 'button';
-  del.title = 'Remove proxy';
+  setTip(del, 'Remove proxy');
   del.appendChild(svgNode(TRASH_SVG));
   del.addEventListener('click', e => { e.stopPropagation(); removeProxy(p.id); });
   actions.appendChild(del);
@@ -619,7 +723,7 @@ function renderSwatches() {
     const sw = h('button', 'swatch' + (color === selectedColor ? ' active' : ''));
     sw.type = 'button';
     sw.style.background = color;
-    sw.title = color;
+    setTip(sw, color);
     sw.addEventListener('click', () => {
       selectedColor = color;
       colorRow.querySelectorAll('.swatch').forEach(x => {
@@ -685,7 +789,7 @@ function addRuleRow(value) {
 
   const remove = h('button', 'rule-remove');
   remove.type = 'button';
-  remove.title = 'Remove rule';
+  setTip(remove, 'Remove rule');
   remove.appendChild(svgNode(X_SVG));
   remove.addEventListener('click', () => {
     row.remove();

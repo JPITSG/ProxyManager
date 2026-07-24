@@ -25,6 +25,15 @@
   --danger: #ff5d73;
   --success: #34d399;
   --radius: 9px;
+
+  /* Floating tooltip chip. Deliberately dark in both themes so it always
+     reads as hovering above the UI rather than as another surface. */
+  --tip-bg: #1e2531;
+  --tip-border: rgba(255, 255, 255, 0.13);
+  --tip-text: #e8ecf3;
+  --tip-muted: rgba(232, 236, 243, 0.6);
+  --tip-shadow: rgba(0, 0, 0, 0.5);
+
   color-scheme: dark;
 }
 
@@ -40,6 +49,9 @@
   --border: rgba(18, 26, 38, 0.1);
   --text: #1d2634;
   --muted: #68727f;
+  --tip-bg: #212a38;
+  --tip-border: rgba(255, 255, 255, 0.16);
+  --tip-shadow: rgba(18, 26, 38, 0.3);
   color-scheme: light;
 }
 :root[data-theme="light"] #proxyList,
@@ -906,4 +918,71 @@ button:focus-visible { outline: 2px solid var(--accent1); outline-offset: 2px; }
 .about-source a:hover {
   color: var(--accent1);
   border-bottom-color: var(--accent1);
+}
+
+/* --- tooltips ----------------------------------------------------------------
+   One floating chip, reused by every trigger and placed by JS: --tip-arrow is
+   the arrow's offset from the chip's left edge, and .below flips the chip
+   under its target. It lives outside .app so the popup's clipped edges and
+   scroll regions can't cut it off. */
+
+.tooltip {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 20;
+  max-width: 250px;
+  padding: 7px 10px;
+  background: var(--tip-bg);
+  border: 1px solid var(--tip-border);
+  border-radius: 8px;
+  box-shadow: 0 8px 20px var(--tip-shadow), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  color: var(--tip-text);
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.45;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transform-origin: var(--tip-arrow, 50%) 100%;
+  transform: translateY(3px) scale(0.98);
+  transition: opacity 0.14s ease, transform 0.14s ease, visibility 0.14s;
+}
+.tooltip.below {
+  transform-origin: var(--tip-arrow, 50%) 0;
+  transform: translateY(-3px) scale(0.98);
+}
+.tooltip.show { opacity: 1; visibility: visible; transform: none; }
+
+/* the arrow: a corner of the chip, rotated to a point */
+.tooltip::after {
+  content: '';
+  position: absolute;
+  left: var(--tip-arrow, 50%);
+  bottom: -4px;
+  width: 8px;
+  height: 8px;
+  margin-left: -4px;
+  background: var(--tip-bg);
+  border-right: 1px solid var(--tip-border);
+  border-bottom: 1px solid var(--tip-border);
+  border-bottom-right-radius: 3px;
+  transform: rotate(45deg);
+}
+.tooltip.below::after {
+  top: -4px;
+  bottom: auto;
+  border: 1px solid var(--tip-border);
+  border-right: 0;
+  border-bottom: 0;
+  border-radius: 0;
+  border-top-left-radius: 3px;
+}
+
+/* continuation lines (text after a newline) read as a footnote */
+.tip-note {
+  margin-top: 4px;
+  font-size: 10.5px;
+  font-weight: 400;
+  color: var(--tip-muted);
 }
