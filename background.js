@@ -50,9 +50,15 @@ function getSelectedProxy() {
 
 // --- Routing ---------------------------------------------------------------
 
-// When the popup tests a proxy configuration, only the test URL is routed
-// through the candidate proxy; everything else keeps the current routing.
-let testRoute = null; // { urlPrefix, proxy }
+// When the popup tests a proxy configuration, only the test probe URLs are
+// routed through the candidate proxy; everything else keeps the current
+// routing.
+let testRoute = null; // { prefixes: [url, ...], proxy }
+
+// True while a proxy test is running and `url` is one of its probes.
+function isTestUrl(url) {
+  return Boolean(testRoute) && testRoute.prefixes.some(prefix => url.startsWith(prefix));
+}
 
 function buildProxyInfo(proxy) {
   const info = {
@@ -133,7 +139,7 @@ browser.proxy.onRequest.addListener(
     // Wait for startup state so the very first requests after browser
     // launch already go through the last selected proxy.
     await stateReady;
-    if (testRoute && details.url.startsWith(testRoute.urlPrefix)) {
+    if (isTestUrl(details.url)) {
       return buildProxyInfo(testRoute.proxy);
     }
 
@@ -153,13 +159,66 @@ browser.proxy.onError.addListener(err => {
 });
 
 // --- Proxy testing ----------------------------------------------------------
-// The popup asks us to verify a proxy configuration. We route a single
-// request to a lightweight IP echo service through the candidate proxy and
-// report back latency and the exit IP.
+// The popup asks us to verify a proxy configuration. One request per IP echo
+// service races through the candidate proxy: the first usable reply wins and
+// aborts the rest, and only when every service fails within the deadline is
+// the proxy reported as broken. The services are run by distinct operators,
+// so one being down — or sitting on a network filter's blocklist, as IP-echo
+// domains often do — cannot fail the test on its own.
 
-const TEST_URL_PREFIX = 'https://api.ipify.org/';
-const TEST_URL = TEST_URL_PREFIX + '?format=json';
+const TEST_TIMEOUT_MS = 10000;
+
+// Accepts an IPv4/IPv6 literal (surrounding whitespace tolerated) and
+// returns it trimmed; anything else — HTML, an error page — yields null.
+function normalizeIp(value) {
+  if (typeof value !== 'string') return null;
+  const s = value.trim();
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(s)) return s;
+  if (s.includes(':') && /^[0-9a-fA-F:.]{2,45}$/.test(s)) return s;
+  return null;
+}
+
+// Each service answers with the caller's public IP; parse() extracts it from
+// the body, returning null for anything unexpected (a filter's block page,
+// say) so the attempt fails rather than reporting a bogus success.
+const TEST_ENDPOINTS = [
+  { url: 'https://api.ipify.org/?format=json', // ipify — {"ip":"…"}
+    parse: body => { try { return normalizeIp(JSON.parse(body).ip); } catch (err) { return null; } } },
+  { url: 'https://www.cloudflare.com/cdn-cgi/trace', // Cloudflare — key=value lines
+    parse: body => { const m = /^ip=(.+)$/m.exec(body); return m ? normalizeIp(m[1]) : null; } },
+  { url: 'https://ifconfig.me/ip', // ifconfig.me — bare address
+    parse: body => normalizeIp(body) },
+  { url: 'https://checkip.amazonaws.com/', // Amazon — bare address
+    parse: body => normalizeIp(body) },
+];
+
 const PROXY_TYPES = new Set(['http', 'https', 'socks', 'socks4']);
+
+// One attempt against one service. Throws on transport errors, redirects
+// (a redirected URL would escape the test route), bad status, and bodies
+// without an IP; `testKind` marks the failures where the proxy answered.
+async function fetchExitIp(endpoint, signal) {
+  const res = await fetch(endpoint.url, { cache: 'no-store', redirect: 'error', signal });
+  if (!res.ok) throw testFailure('HTTP ' + res.status);
+  const ip = endpoint.parse(await res.text());
+  if (!ip) throw testFailure('unusable reply');
+  return ip;
+}
+
+function testFailure(detail) {
+  const err = new Error('Test attempt failed: ' + detail);
+  err.testKind = detail;
+  return err;
+}
+
+// Every service failed — condense the per-service errors into one line.
+function describeTestFailure(err, deadlineHit) {
+  if (deadlineHit) return 'Timed out after ' + (TEST_TIMEOUT_MS / 1000) + ' s';
+  const errors = err instanceof AggregateError ? err.errors : [err];
+  return errors.some(e => e && e.testKind)
+    ? 'Proxy connected, but no test service gave a usable reply'
+    : 'Could not connect through this proxy';
+}
 
 browser.runtime.onMessage.addListener(async msg => {
   if (!msg || msg.type !== 'testProxy' || !msg.proxy) return undefined;
@@ -171,24 +230,18 @@ browser.runtime.onMessage.addListener(async msg => {
   }
 
   const started = Date.now();
-  testRoute = { urlPrefix: TEST_URL_PREFIX, proxy: p };
+  testRoute = { prefixes: TEST_ENDPOINTS.map(e => e.url), proxy: p };
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 9000);
+  let deadlineHit = false;
+  const timer = setTimeout(() => { deadlineHit = true; ctrl.abort(); }, TEST_TIMEOUT_MS);
   try {
-    const res = await fetch(TEST_URL + '&_=' + Date.now(), {
-      cache: 'no-store',
-      signal: ctrl.signal,
-    });
-    if (!res.ok) return { ok: false, error: 'Unexpected response (HTTP ' + res.status + ')' };
-    const data = await res.json();
-    return { ok: true, ip: data.ip || 'unknown', ms: Date.now() - started };
+    const ip = await Promise.any(TEST_ENDPOINTS.map(e => fetchExitIp(e, ctrl.signal)));
+    return { ok: true, ip, ms: Date.now() - started };
   } catch (err) {
-    const reason = err && err.name === 'AbortError'
-      ? 'Timed out after 9 s'
-      : 'Could not connect through this proxy';
-    return { ok: false, error: reason };
+    return { ok: false, error: describeTestFailure(err, deadlineHit) };
   } finally {
     clearTimeout(timer);
+    ctrl.abort(); // a win cancels the slower attempts still in flight
     testRoute = null;
   }
 });
@@ -202,9 +255,7 @@ const answeredRequests = new Set();
 browser.webRequest.onAuthRequired.addListener(
   details => {
     if (!details.isProxy) return {};
-    const proxy = testRoute && details.url.startsWith(testRoute.urlPrefix)
-      ? testRoute.proxy
-      : getSelectedProxy();
+    const proxy = isTestUrl(details.url) ? testRoute.proxy : getSelectedProxy();
     if (!proxy || !proxy.username) return {};
     if (answeredRequests.has(details.requestId)) {
       // Credentials were already tried for this request and rejected.

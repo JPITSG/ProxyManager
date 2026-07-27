@@ -1009,7 +1009,7 @@ function setTestState(phase, res) {
 
   testResult.className = 'test-result' + (phase === 'testing' || phase === 'ok' || phase === 'fail' ? ' ' + phase : '');
   if (phase === 'testing') {
-    testResult.textContent = 'Sending a request through this proxy…';
+    testResult.textContent = 'Sending test requests through this proxy…';
   } else if (phase === 'ok') {
     testResult.textContent = 'Working — exit IP ' + res.ip + ' · ' + res.ms + ' ms';
   } else if (phase === 'fail') {

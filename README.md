@@ -27,10 +27,10 @@ between them — or back to a direct connection — from the toolbar popup.
 - **Persistent profile** — mark one profile to be re-selected
   automatically at browser startup; otherwise the last used selection
   applies.
-- **Connection test** — verify a profile before saving: a single request
-  to a lightweight IP-echo service is routed through the candidate proxy
-  (everything else keeps the current routing) and reports latency and the
-  exit IP.
+- **Connection test** — verify a profile before saving: requests to four
+  IP-echo services race through the candidate proxy (everything else
+  keeps the current routing); the first success reports latency and the
+  exit IP, so one service being down or blocklisted cannot fail the test.
 - **Backup & restore** — export all profiles to a JSON file; re-import
   from file or by drag & drop.
 - **Themes** — system / light / dark popup appearance.
@@ -88,9 +88,11 @@ The built xpi is intentionally not tracked in git (see `.gitignore`).
 
 The extension declares `none` under `data_collection_permissions` in the
 manifest: it collects no data. Profiles and settings live only in
-`browser.storage.local` on your device. The only outbound connection
-beyond your configured proxies is the IP-echo request
-(`api.ipify.org`) made when you explicitly click *Test* on a profile.
+`browser.storage.local` on your device. The only outbound connections
+beyond your configured proxies are the IP-echo requests (`api.ipify.org`,
+`www.cloudflare.com/cdn-cgi/trace`, `ifconfig.me`,
+`checkip.amazonaws.com`) made when you explicitly click *Test* on a
+profile.
 
 ## License
 
