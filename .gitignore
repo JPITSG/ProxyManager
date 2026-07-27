@@ -1,6 +1,9 @@
 # Built package — rebuild from source (see README.md)
 proxy-manager.xpi
 
+# AMO listing assets (generated from icons/icon.svg)
+assets/
+
 # OS / editor noise
 .DS_Store
 Thumbs.db

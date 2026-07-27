@@ -361,10 +361,15 @@ browser.storage.onChanged.addListener((changes, area) => {
 
 // --- Toolbar icon -----------------------------------------------------------
 // The toolbar icon is a full-tile glyph redrawn in the active proxy's
-// identity color; gray means direct connection. No text badge.
+// identity color; gray means direct connection. No text badge. When the
+// selected proxy has Show Proxy Country enabled and its exit country has
+// been resolved, the country's flag is composited over the tile's top-right
+// corner — the same spot, and about the same footprint, as the counter
+// badge other toolbar buttons carry — and the tooltip names the country.
 
 const DIRECT_ICON_COLOR = '#7f8ea6';
 const DEFAULT_PROXY_COLOR = '#f5a524';
+const ICON_SIZES = [16, 32, 64];
 
 function iconDataUrl(color) {
   const svg =
@@ -381,19 +386,158 @@ function iconDataUrl(color) {
   return 'data:image/svg+xml;utf8,' + encodeURIComponent(svg);
 }
 
+// 'PL' → 🇵🇱 (regional indicator pair) — the same glyph the popup list shows.
+const flagEmoji = cc => String.fromCodePoint(...[...cc].map(ch => 0x1F1E6 + ch.charCodeAt(0) - 65));
+
+let regionNames = null;
+try {
+  regionNames = new Intl.DisplayNames(['en'], { type: 'region' });
+} catch (err) { /* older engine — the bare code is shown instead */ }
+
+function countryLabel(cc) {
+  try {
+    const name = regionNames && regionNames.of(cc);
+    return name && name !== cc ? name + ' (' + cc + ')' : cc;
+  } catch (err) {
+    return cc;
+  }
+}
+
+function loadImage(url) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('Icon image failed to decode'));
+    img.src = url;
+  });
+}
+
+// Draws the flag emoji large on a scratch canvas and crops it to its inked
+// pixels. Emoji fonts disagree about glyph bearings, so measuring the pixels
+// that actually landed is the only reliable way to know where the flag is.
+// Throws when nothing renders, in which case the caller keeps the plain tile.
+function renderFlagGlyph(country) {
+  const W = 192, H = 128;
+  const scratch = document.createElement('canvas');
+  scratch.width = W;
+  scratch.height = H;
+  const ctx = scratch.getContext('2d');
+  ctx.font = '96px "Twemoji Mozilla", "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(flagEmoji(country), W / 2, H / 2);
+  const alpha = ctx.getImageData(0, 0, W, H).data;
+  let minX = W, minY = H, maxX = -1, maxY = -1;
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      if (alpha[(y * W + x) * 4 + 3] > 8) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+  if (maxX < 0) throw new Error('Flag glyph did not render');
+  const cropped = document.createElement('canvas');
+  cropped.width = maxX - minX + 1;
+  cropped.height = maxY - minY + 1;
+  cropped.getContext('2d')
+    .drawImage(scratch, minX, minY, cropped.width, cropped.height, 0, 0, cropped.width, cropped.height);
+  return cropped;
+}
+
+// Scales a canvas down in halving steps until one more halving would drop
+// below the target box; a single 10:1 drawImage downscale aliases the flag's
+// stripes away at 16 px, stepped halving keeps them crisp.
+function shrinkToward(canvas, w, h) {
+  let cur = canvas;
+  while (cur.width / 2 > w && cur.height / 2 > h) {
+    const next = document.createElement('canvas');
+    next.width = Math.round(cur.width / 2);
+    next.height = Math.round(cur.height / 2);
+    next.getContext('2d').drawImage(cur, 0, 0, cur.width, cur.height, 0, 0, next.width, next.height);
+    cur = next;
+  }
+  return cur;
+}
+
+// One icon size: the colored tile with the flag in a badge-shaped box flush
+// with the top-right corner. 10×8 px with 2 px corners on the 16 px icon —
+// the visible footprint of a native counter badge.
+function composeIcon(baseImg, flag, size) {
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(baseImg, 0, 0, size, size);
+
+  const bw = Math.round(size * 0.625);
+  const bh = Math.round(size * 0.5);
+  const bx = size - bw;
+  const by = 0;
+  const radius = size * 0.125;
+
+  const scaled = shrinkToward(flag, bw, bh);
+  // cover the box, centring the sliver the aspect difference crops away
+  const scale = Math.max(bw / scaled.width, bh / scaled.height);
+  const dw = scaled.width * scale;
+  const dh = scaled.height * scale;
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.roundRect(bx, by, bw, bh, radius);
+  ctx.clip();
+  ctx.drawImage(scaled, bx + (bw - dw) / 2, by + (bh - dh) / 2, dw, dh);
+  ctx.restore();
+
+  // keyline in the glyph color, so pale flags keep an edge on pale tiles
+  ctx.beginPath();
+  ctx.roundRect(bx, by, bw, bh, radius);
+  ctx.strokeStyle = '#10131a';
+  ctx.lineWidth = Math.max(1, size / 32);
+  ctx.stroke();
+
+  return ctx.getImageData(0, 0, size, size);
+}
+
+// Only the latest render may apply its icon, so a slow flag composite can
+// never overwrite the icon of a selection made after it.
+let iconRenderSeq = 0;
+
 async function updateAction() {
   await stateReady;
   const proxy = getSelectedProxy();
-  browser.browserAction.setIcon({
-    path: iconDataUrl(proxy ? proxy.color || DEFAULT_PROXY_COLOR : DIRECT_ICON_COLOR),
-  });
+  const color = proxy ? proxy.color || DEFAULT_PROXY_COLOR : DIRECT_ICON_COLOR;
+  // The flag rides the toolbar only for a proxy that shows its country in
+  // the list, and only once a real code has been resolved and cached.
+  const country = proxy && proxy.showCountry &&
+    typeof proxy.country === 'string' && /^[A-Z]{2}$/.test(proxy.country)
+    ? proxy.country : null;
+
   // text badge from older versions is no longer used — clear it
   browser.browserAction.setBadgeText({ text: '' });
   browser.browserAction.setTitle({
     title: proxy
-      ? 'Proxy Manager — ' + proxy.name + ' (' + proxy.host + ':' + proxy.port + ')'
+      ? 'Proxy Manager — ' + proxy.name + ' (' + proxy.host + ':' + proxy.port + ')' +
+        (country ? ' — exit country: ' + countryLabel(country) : '')
       : 'Proxy Manager — direct connection',
   });
+
+  const seq = ++iconRenderSeq;
+  let icon = { path: iconDataUrl(color) };
+  if (country) {
+    try {
+      const base = await loadImage(iconDataUrl(color));
+      const flag = renderFlagGlyph(country);
+      const imageData = {};
+      for (const size of ICON_SIZES) imageData[size] = composeIcon(base, flag, size);
+      icon = { imageData };
+    } catch (err) {
+      // no color-emoji rendering here — the plain tile still tells the story
+    }
+  }
+  if (seq === iconRenderSeq) browser.browserAction.setIcon(icon);
 }
 
 // --- Lifecycle --------------------------------------------------------------
