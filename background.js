@@ -463,14 +463,20 @@ function shrinkToward(canvas, w, h) {
 }
 
 // One icon size: the colored tile with the flag in a badge-shaped box flush
-// with the top-right corner. 10×8 px with 2 px corners on the 16 px icon —
-// the visible footprint of a native counter badge.
+// with the canvas' top-right corner. A native counter badge hangs past the
+// icon's corner — Firefox gives it -4px margins on the 16 px icon — which a
+// drawn icon cannot do, so the tile shrinks toward the bottom-left and the
+// flag takes the freed corner: the same up-and-right overhang, drawn inside
+// the box.
 function composeIcon(baseImg, flag, size) {
   const canvas = document.createElement('canvas');
   canvas.width = size;
   canvas.height = size;
   const ctx = canvas.getContext('2d');
-  ctx.drawImage(baseImg, 0, 0, size, size);
+  // 13/16 of the canvas, anchored bottom-left. The freed 3/16 lets the flag
+  // clear the tile's corner the way a real badge clears the icon's.
+  const tile = Math.round(size * 0.8125);
+  ctx.drawImage(baseImg, 0, size - tile, tile, tile);
 
   const bw = Math.round(size * 0.625);
   const bh = Math.round(size * 0.5);
