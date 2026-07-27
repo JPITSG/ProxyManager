@@ -176,7 +176,18 @@
               </label>
             </div>
 
-            <button type="button" class="btn-test" id="testBtn">
+            <div class="toggle-row">
+              <div>
+                <div class="label">Show Proxy Country</div>
+                <div class="hint" data-tip="The country comes from a request sent through this proxy — only once, then it's cached. Click the flag in the list to refresh it.&#10;Services raced: www.cloudflare.com &middot; one.one.one.one &middot; geojs.io &middot; ipapi.co">Flags the exit country in the proxy list; looked up once, then cached</div>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="fShowCountry">
+                <span class="slider"></span>
+              </label>
+            </div>
+
+            <button type="button" class="btn-test" id="testBtn" data-tip="Sends requests through this proxy to four IP echo services; first answer wins.&#10;api.ipify.org &middot; www.cloudflare.com &middot; ifconfig.me &middot; checkip.amazonaws.com">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
               Test Connection
             </button>

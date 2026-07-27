@@ -10,7 +10,8 @@
  * Storage schema (browser.storage.local):
  * {
  *   schemaVersion: 1,
- *   proxies: [{ id, name, type, host, port, color?, username?, password?, proxyDNS, bypassLan?, bypass?, persistent? }],
+ *   proxies: [{ id, name, type, host, port, color?, username?, password?, proxyDNS,
+ *              bypassLan?, bypass?, persistent?, showCountry?, country? }],
  *   selectedId: 'direct' | <proxy id>
  * }
  */
@@ -50,14 +51,15 @@ function getSelectedProxy() {
 
 // --- Routing ---------------------------------------------------------------
 
-// When the popup tests a proxy configuration, only the test probe URLs are
-// routed through the candidate proxy; everything else keeps the current
-// routing.
-let testRoute = null; // { prefixes: [url, ...], proxy }
+// While the popup verifies a proxy (connection test or country lookup), the
+// running probe registers its exact request URLs here; only those URLs are
+// routed through the candidate proxy — everything else keeps the current
+// routing. Each probe's URLs carry a unique token, so concurrent probes for
+// different proxies cannot collide.
+let probeSessions = []; // [{ urls: Set<url>, proxy }]
 
-// True while a proxy test is running and `url` is one of its probes.
-function isTestUrl(url) {
-  return Boolean(testRoute) && testRoute.prefixes.some(prefix => url.startsWith(prefix));
+function probeSessionFor(url) {
+  return probeSessions.find(s => s.urls.has(url)) || null;
 }
 
 function buildProxyInfo(proxy) {
@@ -139,9 +141,8 @@ browser.proxy.onRequest.addListener(
     // Wait for startup state so the very first requests after browser
     // launch already go through the last selected proxy.
     await stateReady;
-    if (isTestUrl(details.url)) {
-      return buildProxyInfo(testRoute.proxy);
-    }
+    const probe = probeSessionFor(details.url);
+    if (probe) return buildProxyInfo(probe.proxy);
 
     const proxy = getSelectedProxy();
     if (proxy) {
@@ -158,15 +159,16 @@ browser.proxy.onError.addListener(err => {
   console.error('[Proxy Manager] Proxy error:', err.message);
 });
 
-// --- Proxy testing ----------------------------------------------------------
-// The popup asks us to verify a proxy configuration. One request per IP echo
-// service races through the candidate proxy: the first usable reply wins and
-// aborts the rest, and only when every service fails within the deadline is
-// the proxy reported as broken. The services are run by distinct operators,
-// so one being down — or sitting on a network filter's blocklist, as IP-echo
-// domains often do — cannot fail the test on its own.
+// --- Proxy probing ----------------------------------------------------------
+// The popup asks us to verify a proxy configuration (connection test) or to
+// determine its exit country. Either way, one request per service races
+// through the candidate proxy: the first usable reply wins and aborts the
+// rest, and only when every service fails within the deadline does the probe
+// report failure. Multiple services means one being down — or sitting on a
+// network filter's blocklist, as IP-lookup domains often do — cannot fail a
+// probe on its own.
 
-const TEST_TIMEOUT_MS = 10000;
+const PROBE_TIMEOUT_MS = 10000;
 
 // Accepts an IPv4/IPv6 literal (surrounding whitespace tolerated) and
 // returns it trimmed; anything else — HTML, an error page — yields null.
@@ -178,6 +180,21 @@ function normalizeIp(value) {
   return null;
 }
 
+// Accepts an ISO 3166-1 alpha-2 country code. Cloudflare's placeholder XX
+// (location unknown) is rejected so another service can win with a real
+// answer instead.
+function normalizeCountry(value) {
+  if (typeof value !== 'string') return null;
+  const s = value.trim().toUpperCase();
+  return /^[A-Z]{2}$/.test(s) && s !== 'XX' ? s : null;
+}
+
+// One `key=value` line out of a Cloudflare /cdn-cgi/trace body.
+function traceField(body, key, normalize) {
+  const m = new RegExp('^' + key + '=(.+)$', 'm').exec(body);
+  return m ? normalize(m[1]) : null;
+}
+
 // Each service answers with the caller's public IP; parse() extracts it from
 // the body, returning null for anything unexpected (a filter's block page,
 // say) so the attempt fails rather than reporting a bogus success.
@@ -185,64 +202,119 @@ const TEST_ENDPOINTS = [
   { url: 'https://api.ipify.org/?format=json', // ipify — {"ip":"…"}
     parse: body => { try { return normalizeIp(JSON.parse(body).ip); } catch (err) { return null; } } },
   { url: 'https://www.cloudflare.com/cdn-cgi/trace', // Cloudflare — key=value lines
-    parse: body => { const m = /^ip=(.+)$/m.exec(body); return m ? normalizeIp(m[1]) : null; } },
+    parse: body => traceField(body, 'ip', normalizeIp) },
   { url: 'https://ifconfig.me/ip', // ifconfig.me — bare address
     parse: body => normalizeIp(body) },
   { url: 'https://checkip.amazonaws.com/', // Amazon — bare address
     parse: body => normalizeIp(body) },
 ];
 
+// Exit-country services. /cdn-cgi/trace is served by Cloudflare under both
+// of its domains — distinct names, so a blocklist rarely catches both —
+// which keeps the lookup alive on networks that blackhole the dedicated
+// geo-IP providers.
+const COUNTRY_ENDPOINTS = [
+  { url: 'https://www.cloudflare.com/cdn-cgi/trace', // Cloudflare — loc=XX line
+    parse: body => traceField(body, 'loc', normalizeCountry) },
+  { url: 'https://one.one.one.one/cdn-cgi/trace', // Cloudflare again, other domain
+    parse: body => traceField(body, 'loc', normalizeCountry) },
+  { url: 'https://get.geojs.io/v1/ip/country.json', // GeoJS — {"country":"XX",…}
+    parse: body => { try { return normalizeCountry(JSON.parse(body).country); } catch (err) { return null; } } },
+  { url: 'https://ipapi.co/country/', // ipapi.co — bare code
+    parse: body => normalizeCountry(body) },
+];
+
 const PROXY_TYPES = new Set(['http', 'https', 'socks', 'socks4']);
 
-// One attempt against one service. Throws on transport errors, redirects
-// (a redirected URL would escape the test route), bad status, and bodies
-// without an IP; `testKind` marks the failures where the proxy answered.
-async function fetchExitIp(endpoint, signal) {
-  const res = await fetch(endpoint.url, { cache: 'no-store', redirect: 'error', signal });
-  if (!res.ok) throw testFailure('HTTP ' + res.status);
-  const ip = endpoint.parse(await res.text());
-  if (!ip) throw testFailure('unusable reply');
-  return ip;
+function validProxyConfig(p) {
+  const port = Number(p.port);
+  return PROXY_TYPES.has(p.type) && typeof p.host === 'string' && Boolean(p.host) &&
+    Number.isInteger(port) && port >= 1 && port <= 65535;
 }
 
-function testFailure(detail) {
-  const err = new Error('Test attempt failed: ' + detail);
-  err.testKind = detail;
+// One attempt against one service. Throws on transport errors, redirects
+// (a redirected URL would escape the probe route), bad status, and bodies
+// that don't parse; `probeKind` marks the failures where the proxy answered.
+async function fetchProbe(url, parse, signal) {
+  const res = await fetch(url, { cache: 'no-store', redirect: 'error', signal });
+  if (!res.ok) throw probeFailure('HTTP ' + res.status);
+  const value = parse(await res.text());
+  if (!value) throw probeFailure('unusable reply');
+  return value;
+}
+
+function probeFailure(detail) {
+  const err = new Error('Probe attempt failed: ' + detail);
+  err.probeKind = detail;
   return err;
 }
 
+// Runs one request per service through `proxy`; the first usable reply wins
+// and the rest abort. Resolves { value, ms }; rejects with the AggregateError
+// from Promise.any, its `deadlineHit` flag set when the shared deadline
+// expired before any service succeeded.
+let probeSeq = 0;
+async function raceThroughProxy(endpoints, proxy) {
+  const token = 'pm' + (++probeSeq).toString(36) + Math.random().toString(36).slice(2, 8);
+  const urls = endpoints.map(e => e.url + (e.url.includes('?') ? '&' : '?') + 'probe=' + token);
+  const session = { urls: new Set(urls), proxy };
+  probeSessions.push(session);
+  const started = Date.now();
+  const ctrl = new AbortController();
+  let deadlineHit = false;
+  const timer = setTimeout(() => { deadlineHit = true; ctrl.abort(); }, PROBE_TIMEOUT_MS);
+  try {
+    const value = await Promise.any(endpoints.map((e, i) => fetchProbe(urls[i], e.parse, ctrl.signal)));
+    return { value, ms: Date.now() - started };
+  } catch (err) {
+    if (err) err.deadlineHit = deadlineHit;
+    throw err;
+  } finally {
+    clearTimeout(timer);
+    ctrl.abort(); // a win cancels the slower attempts still in flight
+    probeSessions = probeSessions.filter(s => s !== session);
+  }
+}
+
 // Every service failed — condense the per-service errors into one line.
-function describeTestFailure(err, deadlineHit) {
-  if (deadlineHit) return 'Timed out after ' + (TEST_TIMEOUT_MS / 1000) + ' s';
+function describeProbeFailure(err) {
+  if (err && err.deadlineHit) return 'Timed out after ' + (PROBE_TIMEOUT_MS / 1000) + ' s';
   const errors = err instanceof AggregateError ? err.errors : [err];
-  return errors.some(e => e && e.testKind)
+  return errors.some(e => e && e.probeKind)
     ? 'Proxy connected, but no test service gave a usable reply'
     : 'Could not connect through this proxy';
 }
 
 browser.runtime.onMessage.addListener(async msg => {
-  if (!msg || msg.type !== 'testProxy' || !msg.proxy) return undefined;
-  const p = msg.proxy;
-  const port = Number(p.port);
-  if (!PROXY_TYPES.has(p.type) || typeof p.host !== 'string' || !p.host ||
-      !Number.isInteger(port) || port < 1 || port > 65535) {
+  if (!msg || !msg.proxy || (msg.type !== 'testProxy' && msg.type !== 'fetchCountry')) {
+    return undefined;
+  }
+  if (!validProxyConfig(msg.proxy)) {
     return { ok: false, error: 'Invalid proxy configuration' };
   }
 
-  const started = Date.now();
-  testRoute = { prefixes: TEST_ENDPOINTS.map(e => e.url), proxy: p };
-  const ctrl = new AbortController();
-  let deadlineHit = false;
-  const timer = setTimeout(() => { deadlineHit = true; ctrl.abort(); }, TEST_TIMEOUT_MS);
+  if (msg.type === 'testProxy') {
+    try {
+      const { value, ms } = await raceThroughProxy(TEST_ENDPOINTS, msg.proxy);
+      return { ok: true, ip: value, ms };
+    } catch (err) {
+      return { ok: false, error: describeProbeFailure(err) };
+    }
+  }
+
+  // fetchCountry — resolve the exit country and cache it on the stored
+  // proxy, so the lookup happens once per proxy until a manual refresh.
   try {
-    const ip = await Promise.any(TEST_ENDPOINTS.map(e => fetchExitIp(e, ctrl.signal)));
-    return { ok: true, ip, ms: Date.now() - started };
+    const { value } = await raceThroughProxy(COUNTRY_ENDPOINTS, msg.proxy);
+    await stateReady;
+    const entry = state.proxies.find(x => x.id === msg.proxy.id);
+    if (entry && entry.showCountry) {
+      entry.country = value;
+      await browser.storage.local.set({ proxies: state.proxies });
+    }
+    return { ok: true, country: value };
   } catch (err) {
-    return { ok: false, error: describeTestFailure(err, deadlineHit) };
-  } finally {
-    clearTimeout(timer);
-    ctrl.abort(); // a win cancels the slower attempts still in flight
-    testRoute = null;
+    return { ok: false, error: describeProbeFailure(err) };
   }
 });
 
@@ -255,7 +327,8 @@ const answeredRequests = new Set();
 browser.webRequest.onAuthRequired.addListener(
   details => {
     if (!details.isProxy) return {};
-    const proxy = isTestUrl(details.url) ? testRoute.proxy : getSelectedProxy();
+    const session = probeSessionFor(details.url);
+    const proxy = session ? session.proxy : getSelectedProxy();
     if (!proxy || !proxy.username) return {};
     if (answeredRequests.has(details.requestId)) {
       // Credentials were already tried for this request and rejected.

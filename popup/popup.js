@@ -23,6 +23,8 @@ const CHECK_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13
 
 const X_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M18 6L6 18"/><path d="M6 6l12 12"/></svg>';
 
+const FLAG_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg>';
+
 const $ = id => document.getElementById(id);
 
 const listView = $('listView');
@@ -66,6 +68,7 @@ const fPass = $('fPass');
 const fDns = $('fDns');
 const fBypassLan = $('fBypassLan');
 const fPersistent = $('fPersistent');
+const fShowCountry = $('fShowCountry');
 
 const bypassHeader = $('bypassHeader');
 const bypassChevron = $('bypassChevron');
@@ -410,6 +413,86 @@ function applyTheme(hex) {
   root.setProperty('--on-accent', luminance > 150 ? '#221d10' : '#ffffff');
 }
 
+// --- Exit country flags -------------------------------------------------------
+// A proxy with showCountry enabled carries a flag chip next to its protocol
+// badge. The two-letter code is cached on the proxy itself — the background
+// service resolves it with a request through that proxy and stores it — so
+// the lookup happens once. Clicking the flag re-fetches; while a lookup is
+// running the chip pulses, and after a failed one it turns into a gray flag
+// that retries on click.
+
+const countryFetches = new Set(); // proxy ids with a lookup in flight
+const countryFailed = new Set();  // ids whose last lookup failed (this popup)
+
+let regionNames = null;
+try {
+  regionNames = new Intl.DisplayNames(['en'], { type: 'region' });
+} catch (err) { /* older engine — the bare code is shown instead */ }
+
+// 'PL' → 🇵🇱 (regional indicator pair)
+const flagEmoji = cc => String.fromCodePoint(...[...cc].map(ch => 0x1F1E6 + ch.charCodeAt(0) - 65));
+
+function countryLabel(cc) {
+  try {
+    const name = regionNames && regionNames.of(cc);
+    return name && name !== cc ? name + ' (' + cc + ')' : cc;
+  } catch (err) {
+    return cc;
+  }
+}
+
+function makeFlag(p) {
+  const btn = h('button', 'country-flag');
+  btn.type = 'button';
+  const fetching = countryFetches.has(p.id);
+  if (fetching) btn.classList.add('loading');
+  if (p.country) {
+    btn.textContent = flagEmoji(p.country);
+    setTip(btn, 'Exit country: ' + countryLabel(p.country) + '\nClick to refresh');
+  } else {
+    btn.classList.add('unknown');
+    btn.appendChild(svgNode(FLAG_SVG));
+    setTip(btn, fetching ? 'Looking up the exit country…'
+      : 'Country unknown — the lookup failed\nClick to retry');
+  }
+  btn.addEventListener('click', e => {
+    e.stopPropagation(); // a card click would switch the connection
+    refreshCountry(p.id);
+  });
+  return btn;
+}
+
+// Redraws one card's flag in place, so lookups never rebuild the list.
+function repaintFlag(id) {
+  const card = proxyList.querySelector('.proxy-card[data-id="' + id + '"]');
+  const old = card && card.querySelector('.country-flag');
+  const p = state.proxies.find(x => x.id === id);
+  if (old && p && p.showCountry) old.replaceWith(makeFlag(p));
+}
+
+async function refreshCountry(id) {
+  const p = state.proxies.find(x => x.id === id);
+  if (!p || countryFetches.has(id)) return;
+  countryFetches.add(id);
+  countryFailed.delete(id);
+  repaintFlag(id);
+
+  let res = null;
+  try {
+    res = await browser.runtime.sendMessage({ type: 'fetchCountry', proxy: p });
+  } catch (err) { /* background unreachable — treated as a failed lookup */ }
+
+  countryFetches.delete(id);
+  const cur = state.proxies.find(x => x.id === id);
+  if (res && res.ok) {
+    // The background service already persisted the code; mirror it locally.
+    if (cur) cur.country = res.country;
+  } else {
+    countryFailed.add(id);
+  }
+  repaintFlag(id);
+}
+
 // --- Rendering --------------------------------------------------------------
 
 // Ids currently on screen. Cards already in this set skip the entry
@@ -478,6 +561,10 @@ function makeCard(p, index, wasShown) {
   info.appendChild(h('div', 'proxy-name', p.name));
   const meta = h('div', 'proxy-meta');
   meta.appendChild(h('span', 'type-badge ' + p.type, TYPE_LABELS[p.type] || String(p.type).toUpperCase()));
+  if (p.showCountry) {
+    if (!p.country && !countryFailed.has(p.id)) refreshCountry(p.id);
+    meta.appendChild(makeFlag(p));
+  }
   meta.appendChild(h('span', 'proxy-addr', p.host + ':' + p.port));
   info.appendChild(meta);
   card.appendChild(info);
@@ -583,7 +670,7 @@ let suppressClick = false;   // swallows the click a finished drag fires
 
 function onCardPointerDown(e, card, index) {
   if (drag || e.button !== 0 || state.proxies.length < 2) return;
-  if (e.target.closest('.card-actions')) return; // edit / delete buttons
+  if (e.target.closest('.card-actions, .country-flag')) return; // buttons on the card
   drag = {
     card,
     index,
@@ -838,6 +925,7 @@ function resetForm() {
   renderSwatches();
   authFields.classList.remove('open');
   fDns.checked = true;
+  fShowCountry.checked = false;
   bypassRules.replaceChildren();
   setBypassOpen(false);
   updateBypassHint();
@@ -872,6 +960,7 @@ function startEdit(id) {
   fDns.checked = Boolean(p.proxyDNS);
   fBypassLan.checked = Boolean(p.bypassLan);
   fPersistent.checked = Boolean(p.persistent);
+  fShowCountry.checked = Boolean(p.showCountry);
 
   bypassRules.replaceChildren();
   (Array.isArray(p.bypass) ? p.bypass : []).forEach(rule => addRuleRow(rule));
@@ -907,6 +996,7 @@ function readForm() {
     bypassLan: fBypassLan.checked,
     bypass: readRuleInputs(),
     persistent: fPersistent.checked,
+    showCountry: fShowCountry.checked,
   };
 
   if (authToggle.checked && fUser.value.trim()) {
@@ -1143,7 +1233,10 @@ function sanitizeProxy(raw) {
       ? raw.bypass.filter(s => typeof s === 'string' && s.trim()).map(s => s.trim())
       : [],
     persistent: Boolean(raw.persistent),
+    showCountry: Boolean(raw.showCountry),
   };
+  const cc = typeof raw.country === 'string' ? raw.country.trim().toUpperCase() : '';
+  if (/^[A-Z]{2}$/.test(cc)) p.country = cc; // keep the cached exit country
   if (typeof raw.username === 'string' && raw.username) {
     p.username = raw.username;
     p.password = typeof raw.password === 'string' ? raw.password : '';

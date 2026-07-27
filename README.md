@@ -27,6 +27,11 @@ between them — or back to a direct connection — from the toolbar popup.
 - **Persistent profile** — mark one profile to be re-selected
   automatically at browser startup; otherwise the last used selection
   applies.
+- **Exit country flags** — optional per-profile flag chip (off by
+  default) next to the protocol badge showing the country of the proxy's
+  exit IP. Looked up once through the proxy, cached, and refreshed by
+  clicking the flag; a gray flag marks a failed lookup and retries on
+  click.
 - **Connection test** — verify a profile before saving: requests to four
   IP-echo services race through the candidate proxy (everything else
   keeps the current routing); the first success reports latency and the
@@ -92,7 +97,10 @@ manifest: it collects no data. Profiles and settings live only in
 beyond your configured proxies are the IP-echo requests (`api.ipify.org`,
 `www.cloudflare.com/cdn-cgi/trace`, `ifconfig.me`,
 `checkip.amazonaws.com`) made when you explicitly click *Test* on a
-profile.
+profile, and — only for profiles with *Show Proxy Country* enabled — the
+exit-country lookups (`www.cloudflare.com/cdn-cgi/trace`,
+`one.one.one.one/cdn-cgi/trace`, `get.geojs.io`, `ipapi.co`), sent
+through that proxy once and cached until you refresh them.
 
 ## License
 
