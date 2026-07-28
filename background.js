@@ -12,17 +12,34 @@
  *   schemaVersion: 1,
  *   proxies: [{ id, name, type, host, port, color?, username?, password?, proxyDNS,
  *              bypassLan?, bypass?, persistent?, showCountry?, country? }],
+ *   direct: { color, showCountry, country? },
  *   selectedId: 'direct' | <proxy id>
  * }
  */
 
+const DEFAULT_DIRECT_COLOR = '#7f8ea6';
+const DEFAULT_DIRECT = { color: DEFAULT_DIRECT_COLOR, showCountry: false };
+
 const DEFAULT_STATE = {
   schemaVersion: 1,
   proxies: [],
+  direct: DEFAULT_DIRECT,
   selectedId: 'direct',
 };
 
-let state = { ...DEFAULT_STATE };
+let state = { ...DEFAULT_STATE, direct: { ...DEFAULT_DIRECT } };
+
+function normalizeDirectSettings(raw) {
+  const direct = { ...DEFAULT_DIRECT };
+  if (!raw || typeof raw !== 'object') return direct;
+  if (typeof raw.color === 'string' && /^#[0-9a-f]{6}$/i.test(raw.color)) {
+    direct.color = raw.color;
+  }
+  direct.showCountry = Boolean(raw.showCountry);
+  const cc = typeof raw.country === 'string' ? raw.country.trim().toUpperCase() : '';
+  if (/^[A-Z]{2}$/.test(cc)) direct.country = cc;
+  return direct;
+}
 
 // Resolved once the persisted state has been read at startup.
 const stateReady = (async () => {
@@ -30,6 +47,7 @@ const stateReady = (async () => {
     const stored = await browser.storage.local.get(null);
     state = { ...DEFAULT_STATE, ...stored };
     if (!Array.isArray(state.proxies)) state.proxies = [];
+    state.direct = normalizeDirectSettings(state.direct);
 
     // Startup selection rule: a proxy marked persistent takes over the
     // selection (at most one can be — the popup enforces that). Otherwise
@@ -51,12 +69,12 @@ function getSelectedProxy() {
 
 // --- Routing ---------------------------------------------------------------
 
-// While the popup verifies a proxy (connection test or country lookup), the
+// While the popup verifies a connection (proxy test or country lookup), the
 // running probe registers its exact request URLs here; only those URLs are
-// routed through the candidate proxy — everything else keeps the current
+// routed through the candidate connection — everything else keeps the current
 // routing. Each probe's URLs carry a unique token, so concurrent probes for
-// different proxies cannot collide.
-let probeSessions = []; // [{ urls: Set<url>, proxy }]
+// different connections cannot collide. A null proxy means direct routing.
+let probeSessions = []; // [{ urls: Set<url>, proxy: object | null }]
 
 function probeSessionFor(url) {
   return probeSessions.find(s => s.urls.has(url)) || null;
@@ -142,7 +160,7 @@ browser.proxy.onRequest.addListener(
     // launch already go through the last selected proxy.
     await stateReady;
     const probe = probeSessionFor(details.url);
-    if (probe) return buildProxyInfo(probe.proxy);
+    if (probe) return probe.proxy ? buildProxyInfo(probe.proxy) : { type: 'direct' };
 
     const proxy = getSelectedProxy();
     if (proxy) {
@@ -249,12 +267,13 @@ function probeFailure(detail) {
   return err;
 }
 
-// Runs one request per service through `proxy`; the first usable reply wins
+// Runs one request per service through `proxy`, or directly when it is null;
+// the first usable reply wins
 // and the rest abort. Resolves { value, ms }; rejects with the AggregateError
 // from Promise.any, its `deadlineHit` flag set when the shared deadline
 // expired before any service succeeded.
 let probeSeq = 0;
-async function raceThroughProxy(endpoints, proxy) {
+async function raceThroughConnection(endpoints, proxy) {
   const token = 'pm' + (++probeSeq).toString(36) + Math.random().toString(36).slice(2, 8);
   const urls = endpoints.map(e => e.url + (e.url.includes('?') ? '&' : '?') + 'probe=' + token);
   const session = { urls: new Set(urls), proxy };
@@ -286,31 +305,40 @@ function describeProbeFailure(err) {
 }
 
 browser.runtime.onMessage.addListener(async msg => {
-  if (!msg || !msg.proxy || (msg.type !== 'testProxy' && msg.type !== 'fetchCountry')) {
+  if (!msg || (msg.type !== 'testProxy' && msg.type !== 'fetchCountry')) {
     return undefined;
   }
-  if (!validProxyConfig(msg.proxy)) {
+  const directLookup = msg.type === 'fetchCountry' && msg.connectionId === 'direct';
+  const proxy = directLookup ? null : msg.proxy;
+  if (!directLookup && (!proxy || !validProxyConfig(proxy))) {
     return { ok: false, error: 'Invalid proxy configuration' };
   }
 
   if (msg.type === 'testProxy') {
     try {
-      const { value, ms } = await raceThroughProxy(TEST_ENDPOINTS, msg.proxy);
+      const { value, ms } = await raceThroughConnection(TEST_ENDPOINTS, proxy);
       return { ok: true, ip: value, ms };
     } catch (err) {
       return { ok: false, error: describeProbeFailure(err) };
     }
   }
 
-  // fetchCountry — resolve the exit country and cache it on the stored
-  // proxy, so the lookup happens once per proxy until a manual refresh.
+  // fetchCountry — resolve the country over the requested connection and
+  // cache it there, so the lookup happens once until a manual refresh.
   try {
-    const { value } = await raceThroughProxy(COUNTRY_ENDPOINTS, msg.proxy);
+    const { value } = await raceThroughConnection(COUNTRY_ENDPOINTS, proxy);
     await stateReady;
-    const entry = state.proxies.find(x => x.id === msg.proxy.id);
-    if (entry && entry.showCountry) {
-      entry.country = value;
-      await browser.storage.local.set({ proxies: state.proxies });
+    if (directLookup) {
+      if (state.direct.showCountry) {
+        state.direct.country = value;
+        await browser.storage.local.set({ direct: state.direct });
+      }
+    } else {
+      const entry = state.proxies.find(x => x.id === proxy.id);
+      if (entry && entry.showCountry) {
+        entry.country = value;
+        await browser.storage.local.set({ proxies: state.proxies });
+      }
     }
     return { ok: true, country: value };
   } catch (err) {
@@ -355,19 +383,19 @@ browser.webRequest.onErrorOccurred.addListener(d => forgetRequest(d.requestId), 
 browser.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local') return;
   if (changes.proxies) state.proxies = changes.proxies.newValue || [];
+  if (changes.direct) state.direct = normalizeDirectSettings(changes.direct.newValue);
   if (changes.selectedId) state.selectedId = changes.selectedId.newValue || 'direct';
   updateAction();
 });
 
 // --- Toolbar icon -----------------------------------------------------------
 // The toolbar icon is a full-tile glyph redrawn in the active proxy's
-// identity color; gray means direct connection. No text badge. When the
-// selected proxy has Show Proxy Country enabled and its exit country has
-// been resolved, the country's flag is composited over the tile's top-right
-// corner — the same spot, and about the same footprint, as the counter
-// badge other toolbar buttons carry — and the tooltip names the country.
+// identity color, or the configured direct-connection color. No text badge.
+// When the selected connection shows its country and a code has been
+// resolved, the flag is composited over the tile's top-right corner — the
+// same spot, and about the same footprint, as the counter badge other
+// toolbar buttons carry — and the tooltip names the country.
 
-const DIRECT_ICON_COLOR = '#7f8ea6';
 const DEFAULT_PROXY_COLOR = '#f5a524';
 const ICON_SIZES = [16, 32, 64];
 
@@ -510,12 +538,15 @@ let iconRenderSeq = 0;
 async function updateAction() {
   await stateReady;
   const proxy = getSelectedProxy();
-  const color = proxy ? proxy.color || DEFAULT_PROXY_COLOR : DIRECT_ICON_COLOR;
-  // The flag rides the toolbar only for a proxy that shows its country in
-  // the list, and only once a real code has been resolved and cached.
-  const country = proxy && proxy.showCountry &&
-    typeof proxy.country === 'string' && /^[A-Z]{2}$/.test(proxy.country)
-    ? proxy.country : null;
+  const connection = proxy || state.direct;
+  const color = proxy
+    ? proxy.color || DEFAULT_PROXY_COLOR
+    : connection.color || DEFAULT_DIRECT_COLOR;
+  // The flag rides the toolbar only when the selected connection shows its
+  // country in the list and a real code has been resolved and cached.
+  const country = connection.showCountry &&
+    typeof connection.country === 'string' && /^[A-Z]{2}$/.test(connection.country)
+    ? connection.country : null;
 
   // text badge from older versions is no longer used — clear it
   browser.browserAction.setBadgeText({ text: '' });
@@ -523,7 +554,8 @@ async function updateAction() {
     title: proxy
       ? 'Proxy Manager — ' + proxy.name + ' (' + proxy.host + ':' + proxy.port + ')' +
         (country ? ' — exit country: ' + countryLabel(country) : '')
-      : 'Proxy Manager — direct connection',
+      : 'Proxy Manager — direct connection' +
+        (country ? ' — connection country: ' + countryLabel(country) : ''),
   });
 
   const seq = ++iconRenderSeq;
@@ -548,6 +580,7 @@ browser.runtime.onInstalled.addListener(async () => {
   const stored = await browser.storage.local.get(null);
   const init = {};
   if (!Array.isArray(stored.proxies)) init.proxies = [];
+  if (!stored.direct || typeof stored.direct !== 'object') init.direct = DEFAULT_DIRECT;
   if (typeof stored.selectedId !== 'string') init.selectedId = 'direct';
   if (typeof stored.schemaVersion !== 'number') init.schemaVersion = 1;
   if (Object.keys(init).length) await browser.storage.local.set(init);

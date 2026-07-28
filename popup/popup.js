@@ -8,8 +8,12 @@ const TYPE_LABELS = { http: 'HTTP', https: 'HTTPS', socks: 'SOCKS5', socks4: 'SO
 const PALETTE = ['#f5a524', '#f97316', '#ef4444', '#ec4899', '#8b5cf6',
                  '#3b82f6', '#06b6d4', '#14b8a6', '#22c55e', '#84cc16'];
 
-// Theme for direct mode. Deliberately NOT one of the palette colors.
-const DIRECT_THEME_COLOR = '#7f8ea6';
+// Direct mode starts neutral, but its identity color can be changed from
+// the direct-connection editor. Keep neutral available alongside the proxy
+// palette so the default is always selectable again.
+const DEFAULT_DIRECT_COLOR = '#7f8ea6';
+const DIRECT_PALETTE = [DEFAULT_DIRECT_COLOR, ...PALETTE];
+const DEFAULT_DIRECT = { color: DEFAULT_DIRECT_COLOR, showCountry: false };
 
 const TRASH_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>';
 
@@ -30,6 +34,8 @@ const $ = id => document.getElementById(id);
 const listView = $('listView');
 const formView = $('formView');
 const formScroll = $('formScroll');
+const directFormView = $('directFormView');
+const directFormScroll = $('directFormScroll');
 const settingsView = $('settingsView');
 const proxyList = $('proxyList');
 const statusLine = $('statusLine');
@@ -41,12 +47,16 @@ const settingsBackBtn = $('settingsBackBtn');
 const backBtn = $('backBtn');
 const cancelBtn = $('cancelBtn');
 const proxyForm = $('proxyForm');
+const directBackBtn = $('directBackBtn');
+const directCancelBtn = $('directCancelBtn');
+const directForm = $('directForm');
 const formTitle = $('formTitle');
 const saveBtn = $('saveBtn');
 const connectBtn = $('connectBtn');
 const cloneBtn = $('cloneBtn');
 const typeSeg = $('typeSeg');
 const colorRow = $('colorRow');
+const directColorRow = $('directColorRow');
 const dnsRow = $('dnsRow');
 const authToggle = $('fAuth');
 const authFields = $('authFields');
@@ -69,6 +79,7 @@ const fDns = $('fDns');
 const fBypassLan = $('fBypassLan');
 const fPersistent = $('fPersistent');
 const fShowCountry = $('fShowCountry');
+const fDirectShowCountry = $('fDirectShowCountry');
 
 const bypassHeader = $('bypassHeader');
 const bypassChevron = $('bypassChevron');
@@ -78,9 +89,10 @@ const bypassHint = $('bypassHint');
 const bypassEmpty = $('bypassEmpty');
 const addRuleBtn = $('addRuleBtn');
 
-let state = { proxies: [], selectedId: 'direct' };
+let state = { proxies: [], selectedId: 'direct', direct: { ...DEFAULT_DIRECT } };
 let currentType = 'http';
 let selectedColor = PALETTE[0];
+let selectedDirectColor = DEFAULT_DIRECT_COLOR;
 let editingId = null; // null = adding a new proxy, otherwise id being edited
 
 // Color scheme preference: 'system' | 'light' | 'dark'. 'system' is
@@ -116,8 +128,14 @@ function svgNode(markup) {
 init();
 
 async function init() {
-  state = await browser.storage.local.get({ proxies: [], selectedId: 'direct', theme: 'system' });
+  state = await browser.storage.local.get({
+    proxies: [],
+    selectedId: 'direct',
+    direct: DEFAULT_DIRECT,
+    theme: 'system',
+  });
   if (!Array.isArray(state.proxies)) state.proxies = [];
+  state.direct = sanitizeDirect(state.direct);
 
   // Restore the saved color scheme preference.
   themePreference = ['system', 'light', 'dark'].includes(state.theme) ? state.theme : 'system';
@@ -146,7 +164,10 @@ function bindEvents() {
   settingsBackBtn.addEventListener('click', () => showView(listView));
   backBtn.addEventListener('click', () => showView(listView));
   cancelBtn.addEventListener('click', () => showView(listView));
+  directBackBtn.addEventListener('click', () => showView(listView));
+  directCancelBtn.addEventListener('click', () => showView(listView));
   proxyForm.addEventListener('submit', onSubmit);
+  directForm.addEventListener('submit', onDirectSubmit);
   testBtn.addEventListener('click', onTest);
   cloneBtn.addEventListener('click', onClone);
 
@@ -208,7 +229,7 @@ function bindEvents() {
 // --- Views ------------------------------------------------------------------
 
 function showView(view) {
-  [listView, formView, settingsView].forEach(v => {
+  [listView, formView, directFormView, settingsView].forEach(v => {
     v.classList.toggle('hidden', v !== view);
   });
   closeTip(); // whatever it pointed at is on its way out
@@ -221,7 +242,7 @@ function showView(view) {
 // While a region is scrolled away from an edge, that edge gets a gradient
 // fade (.fade-top / .fade-bottom) instead of a hard clip.
 
-const scrollLaneEls = [proxyList, formScroll];
+const scrollLaneEls = [proxyList, formScroll, directFormScroll];
 
 function updateScrollLanes() {
   scrollLaneEls.forEach(el => {
@@ -344,7 +365,7 @@ scrollLaneEls.forEach(el => el.addEventListener('scroll', closeTip, { passive: t
 
 // --- Dynamic theme -------------------------------------------------------------
 // The whole accent (gradient, glows, focus rings, button text) derives from
-// the active proxy's identity color. Direct mode uses DIRECT_THEME_COLOR.
+// the active connection's identity color.
 
 function hexToRgb(hex) {
   const n = parseInt(hex.slice(1), 16);
@@ -414,14 +435,13 @@ function applyTheme(hex) {
 }
 
 // --- Exit country flags -------------------------------------------------------
-// A proxy with showCountry enabled carries a flag chip next to its protocol
-// badge. The two-letter code is cached on the proxy itself — the background
-// service resolves it with a request through that proxy and stores it — so
-// the lookup happens once. Clicking the flag re-fetches; while a lookup is
-// running the chip pulses, and after a failed one it turns into a gray flag
-// that retries on click.
+// A connection with showCountry enabled carries a flag chip next to its type
+// badge. The two-letter code is cached on that connection — the background
+// service resolves it over the matching route and stores it — so the lookup
+// happens once. Clicking the flag re-fetches; while a lookup is running the
+// chip pulses, and after a failed one it turns into a gray flag that retries.
 
-const countryFetches = new Set(); // proxy ids with a lookup in flight
+const countryFetches = new Set(); // connection ids with a lookup in flight
 const countryFailed = new Set();  // ids whose last lookup failed (this popup)
 
 let regionNames = null;
@@ -441,18 +461,26 @@ function countryLabel(cc) {
   }
 }
 
+function getConnection(id) {
+  return id === 'direct'
+    ? { id: 'direct', ...state.direct }
+    : state.proxies.find(x => x.id === id);
+}
+
 function makeFlag(p) {
   const btn = h('button', 'country-flag');
   btn.type = 'button';
   const fetching = countryFetches.has(p.id);
+  const direct = p.id === 'direct';
+  const kind = direct ? 'Connection country' : 'Exit country';
   if (fetching) btn.classList.add('loading');
   if (p.country) {
     btn.textContent = flagEmoji(p.country);
-    setTip(btn, 'Exit country: ' + countryLabel(p.country) + '\nClick to refresh');
+    setTip(btn, kind + ': ' + countryLabel(p.country) + '\nClick to refresh');
   } else {
     btn.classList.add('unknown');
     btn.appendChild(svgNode(FLAG_SVG));
-    setTip(btn, fetching ? 'Looking up the exit country…'
+    setTip(btn, fetching ? 'Looking up the ' + (direct ? 'connection' : 'exit') + ' country…'
       : 'Country unknown — the lookup failed\nClick to retry');
   }
   btn.addEventListener('click', e => {
@@ -466,12 +494,12 @@ function makeFlag(p) {
 function repaintFlag(id) {
   const card = proxyList.querySelector('.proxy-card[data-id="' + id + '"]');
   const old = card && card.querySelector('.country-flag');
-  const p = state.proxies.find(x => x.id === id);
+  const p = getConnection(id);
   if (old && p && p.showCountry) old.replaceWith(makeFlag(p));
 }
 
 async function refreshCountry(id) {
-  const p = state.proxies.find(x => x.id === id);
+  const p = getConnection(id);
   if (!p || countryFetches.has(id)) return;
   countryFetches.add(id);
   countryFailed.delete(id);
@@ -479,14 +507,19 @@ async function refreshCountry(id) {
 
   let res = null;
   try {
-    res = await browser.runtime.sendMessage({ type: 'fetchCountry', proxy: p });
+    res = await browser.runtime.sendMessage(id === 'direct'
+      ? { type: 'fetchCountry', connectionId: 'direct' }
+      : { type: 'fetchCountry', proxy: p });
   } catch (err) { /* background unreachable — treated as a failed lookup */ }
 
   countryFetches.delete(id);
-  const cur = state.proxies.find(x => x.id === id);
   if (res && res.ok) {
     // The background service already persisted the code; mirror it locally.
-    if (cur) cur.country = res.country;
+    if (id === 'direct') state.direct.country = res.country;
+    else {
+      const cur = state.proxies.find(x => x.id === id);
+      if (cur) cur.country = res.country;
+    }
   } else {
     countryFailed.add(id);
   }
@@ -522,11 +555,12 @@ function renderList() {
 }
 
 function makeDirectCard(wasShown) {
+  const direct = getConnection('direct');
   const card = h('div', 'proxy-card');
   card.tabIndex = 0;
   card.dataset.id = 'direct';
   if (wasShown.has('direct')) card.style.animation = 'none';
-  card.style.setProperty('--pc', DIRECT_THEME_COLOR);
+  card.style.setProperty('--pc', direct.color);
   if (state.selectedId === 'direct') card.classList.add('selected');
   card.appendChild(h('div', 'radio'));
 
@@ -534,9 +568,22 @@ function makeDirectCard(wasShown) {
   info.appendChild(h('div', 'proxy-name', 'Direct Connection'));
   const meta = h('div', 'proxy-meta');
   meta.appendChild(h('span', 'type-badge direct', 'DIRECT'));
+  if (direct.showCountry) {
+    if (!direct.country && !countryFailed.has('direct')) refreshCountry('direct');
+    meta.appendChild(makeFlag(direct));
+  }
   meta.appendChild(h('span', 'proxy-addr', 'No proxy — use your real IP'));
   info.appendChild(meta);
   card.appendChild(info);
+
+  const actions = h('div', 'card-actions');
+  const edit = h('button', 'edit-btn');
+  edit.type = 'button';
+  setTip(edit, 'Edit direct connection');
+  edit.appendChild(svgNode(EDIT_SVG));
+  edit.addEventListener('click', e => { e.stopPropagation(); startDirectEdit(); });
+  actions.appendChild(edit);
+  card.appendChild(actions);
 
   card.addEventListener('click', () => selectProxy('direct'));
   card.addEventListener('keydown', e => {
@@ -618,7 +665,7 @@ function updateStatus() {
   statusText.textContent = active ? 'Active' : 'Direct';
   statusText.classList.toggle('on', active);
   statusLine.textContent = p ? p.name + ' · ' + p.host + ':' + p.port : 'Direct connection';
-  applyTheme(active ? (p.color || PALETTE[0]) : DIRECT_THEME_COLOR);
+  applyTheme(active ? (p.color || PALETTE[0]) : state.direct.color);
 }
 
 // --- Actions ----------------------------------------------------------------
@@ -820,21 +867,30 @@ function setType(type) {
   updateScrollLanes();
 }
 
-function renderSwatches() {
-  colorRow.replaceChildren();
-  PALETTE.forEach(color => {
-    const sw = h('button', 'swatch' + (color === selectedColor ? ' active' : ''));
+function fillSwatches(row, colors, selected, onSelect) {
+  row.replaceChildren();
+  colors.forEach(color => {
+    const sw = h('button', 'swatch' + (color === selected ? ' active' : ''));
     sw.type = 'button';
     sw.style.background = color;
     setTip(sw, color);
     sw.addEventListener('click', () => {
-      selectedColor = color;
-      colorRow.querySelectorAll('.swatch').forEach(x => {
+      onSelect(color);
+      row.querySelectorAll('.swatch').forEach(x => {
         x.classList.toggle('active', x === sw);
       });
     });
-    colorRow.appendChild(sw);
+    row.appendChild(sw);
   });
+}
+
+function renderSwatches() {
+  fillSwatches(colorRow, PALETTE, selectedColor, color => { selectedColor = color; });
+}
+
+function renderDirectSwatches() {
+  fillSwatches(directColorRow, DIRECT_PALETTE, selectedDirectColor,
+    color => { selectedDirectColor = color; });
 }
 
 // --- Bypass rules -------------------------------------------------------------
@@ -970,6 +1026,29 @@ function startEdit(id) {
 
   showView(formView);
   fName.focus();
+}
+
+function startDirectEdit() {
+  directForm.reset();
+  directFormScroll.scrollTop = 0;
+  selectedDirectColor = state.direct.color;
+  fDirectShowCountry.checked = state.direct.showCountry;
+  renderDirectSwatches();
+  showView(directFormView);
+  const activeSwatch = directColorRow.querySelector('.swatch.active');
+  if (activeSwatch) activeSwatch.focus();
+}
+
+async function onDirectSubmit(e) {
+  e.preventDefault();
+  state.direct = {
+    ...state.direct,
+    color: selectedDirectColor,
+    showCountry: fDirectShowCountry.checked,
+  };
+  await browser.storage.local.set({ direct: state.direct });
+  showView(listView);
+  renderList();
 }
 
 // Reads and validates the form. Returns { proxy } or { error }.
@@ -1127,7 +1206,11 @@ async function onExport() {
       app: 'proxy-manager',
       schemaVersion: 1,
       exportedAt: new Date().toISOString(),
-      data: { proxies: state.proxies, selectedId: state.selectedId },
+      data: {
+        proxies: state.proxies,
+        selectedId: state.selectedId,
+        direct: state.direct,
+      },
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -1163,7 +1246,12 @@ async function importBackup(file) {
 
   state.proxies = result.proxies;
   state.selectedId = result.selectedId;
-  await browser.storage.local.set({ proxies: state.proxies, selectedId: state.selectedId });
+  state.direct = result.direct;
+  await browser.storage.local.set({
+    proxies: state.proxies,
+    selectedId: state.selectedId,
+    direct: state.direct,
+  });
   renderList();
 
   let msg = 'Imported ' + plural(result.proxies.length, 'proxy') + '.';
@@ -1172,8 +1260,8 @@ async function importBackup(file) {
 }
 
 // Accepts our own export format ({ data: {...} }) or a bare
-// { proxies, selectedId } object. Returns { proxies, selectedId, skipped }
-// or { error }.
+// { proxies, selectedId, direct? } object. Returns
+// { proxies, selectedId, direct, skipped } or { error }.
 function validateBackup(parsed) {
   const data = parsed && typeof parsed === 'object'
     ? (parsed.data && typeof parsed.data === 'object' ? parsed.data : parsed)
@@ -1208,8 +1296,21 @@ function validateBackup(parsed) {
     (data.selectedId === 'direct' || seenIds.has(data.selectedId))
     ? data.selectedId
     : 'direct';
+  const direct = sanitizeDirect(data.direct);
 
-  return { proxies, selectedId, skipped };
+  return { proxies, selectedId, direct, skipped };
+}
+
+function sanitizeDirect(raw) {
+  const direct = { ...DEFAULT_DIRECT };
+  if (!raw || typeof raw !== 'object') return direct;
+  if (typeof raw.color === 'string' && /^#[0-9a-f]{6}$/i.test(raw.color)) {
+    direct.color = raw.color;
+  }
+  direct.showCountry = Boolean(raw.showCountry);
+  const cc = typeof raw.country === 'string' ? raw.country.trim().toUpperCase() : '';
+  if (/^[A-Z]{2}$/.test(cc)) direct.country = cc;
+  return direct;
 }
 
 // Normalizes one raw proxy entry; returns null when mandatory fields are bad.

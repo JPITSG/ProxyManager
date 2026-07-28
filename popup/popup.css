@@ -55,9 +55,9 @@
   color-scheme: light;
 }
 :root[data-theme="light"] #proxyList,
-:root[data-theme="light"] #formScroll { scrollbar-color: #c2cad7 transparent; }
+:root[data-theme="light"] .form-scroll { scrollbar-color: #c2cad7 transparent; }
 :root[data-theme="light"] #proxyList::-webkit-scrollbar-thumb,
-:root[data-theme="light"] #formScroll::-webkit-scrollbar-thumb { background: #c2cad7; }
+:root[data-theme="light"] .form-scroll::-webkit-scrollbar-thumb { background: #c2cad7; }
 :root[data-theme="light"] .proxy-card:hover { border-color: rgba(18, 26, 38, 0.18); }
 :root[data-theme="light"] .proxy-card.selected { box-shadow: 0 3px 12px rgba(18, 26, 38, 0.14); }
 :root[data-theme="light"] #proxyList.reordering .proxy-card.dragging { box-shadow: 0 10px 24px rgba(18, 26, 38, 0.22); }
@@ -258,16 +258,16 @@ main { position: relative; z-index: 1; padding: 0 18px 18px; }
   scrollbar-color: #2a3145 transparent;
 }
 
-/* the form view is a height-capped flex column: only #formScroll scrolls,
+/* editor views are height-capped flex columns: only .form-scroll scrolls,
    while the error line and the Cancel/Save row stay pinned at the bottom */
-#formView {
+.editor-view {
   max-height: 508px;
   overflow: hidden;
   display: flex;
   flex-direction: column;
 }
 
-#proxyForm {
+.editor-form {
   flex: 1;
   min-height: 0;
   display: flex;
@@ -275,7 +275,7 @@ main { position: relative; z-index: 1; padding: 0 18px 18px; }
   overflow: hidden;
 }
 
-#formScroll {
+.form-scroll {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
@@ -285,28 +285,28 @@ main { position: relative; z-index: 1; padding: 0 18px 18px; }
 }
 
 #proxyList.has-scroll,
-#formScroll.has-scroll { padding-right: 14px; }
+.form-scroll.has-scroll { padding-right: 14px; }
 
 #proxyList::-webkit-scrollbar,
-#formScroll::-webkit-scrollbar { width: 6px; }
+.form-scroll::-webkit-scrollbar { width: 6px; }
 #proxyList::-webkit-scrollbar-track,
-#formScroll::-webkit-scrollbar-track { background: transparent; }
+.form-scroll::-webkit-scrollbar-track { background: transparent; }
 #proxyList::-webkit-scrollbar-thumb,
-#formScroll::-webkit-scrollbar-thumb { background: #2a3145; border-radius: 3px; }
+.form-scroll::-webkit-scrollbar-thumb { background: #2a3145; border-radius: 3px; }
 
 /* edge fades, applied only while scrolled away from that edge */
 #proxyList.fade-top,
-#formScroll.fade-top {
+.form-scroll.fade-top {
   -webkit-mask-image: linear-gradient(to bottom, transparent, #000 26px);
   mask-image: linear-gradient(to bottom, transparent, #000 26px);
 }
 #proxyList.fade-bottom,
-#formScroll.fade-bottom {
+.form-scroll.fade-bottom {
   -webkit-mask-image: linear-gradient(to top, transparent, #000 26px);
   mask-image: linear-gradient(to top, transparent, #000 26px);
 }
 #proxyList.fade-top.fade-bottom,
-#formScroll.fade-top.fade-bottom {
+.form-scroll.fade-top.fade-bottom {
   -webkit-mask-image: linear-gradient(to bottom, transparent, #000 26px, #000 calc(100% - 26px), transparent);
   mask-image: linear-gradient(to bottom, transparent, #000 26px, #000 calc(100% - 26px), transparent);
 }
@@ -568,6 +568,27 @@ button:focus-visible { outline: 2px solid var(--accent1); outline-offset: 2px; }
   flex-shrink: 0;
 }
 .form-header h2 { font-size: 15px; font-weight: 700; }
+
+.form-section {
+  padding-bottom: 16px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+.form-section:last-child {
+  padding-bottom: 2px;
+  margin-bottom: 0;
+  border-bottom: 0;
+}
+.form-section-label {
+  margin: 0 2px 11px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.35px;
+  text-transform: uppercase;
+  color: var(--accent-text);
+}
+.form-section > .field:last-child,
+.form-section > .toggle-row:last-child { margin-bottom: 0; }
 
 .icon-btn {
   width: 30px;

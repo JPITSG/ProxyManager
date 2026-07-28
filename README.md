@@ -9,8 +9,10 @@ between them — or back to a direct connection — from the toolbar popup.
 - **Multiple proxy profiles** — HTTP, HTTPS, SOCKS5 and SOCKS4, each with
   a name, host, port and optional color tag.
 - **One-click switching** — pick a profile in the popup, or switch back to
-  a direct connection; the toolbar icon takes on the active profile's
-  color (gray means direct).
+  a direct connection; the toolbar icon takes on the active connection's
+  identity color.
+- **Customizable direct connection** — give the direct connection its own
+  color and optionally show the country of your public IP.
 - **Reorderable list** — press, hold and drag a profile card to change
   the order; Ctrl+↑/↓ (or Alt+↑/↓) on a focused card does the same from
   the keyboard.
@@ -27,17 +29,16 @@ between them — or back to a direct connection — from the toolbar popup.
 - **Persistent profile** — mark one profile to be re-selected
   automatically at browser startup; otherwise the last used selection
   applies.
-- **Exit country flags** — optional per-profile flag chip (off by
-  default) next to the protocol badge showing the country of the proxy's
-  exit IP. Looked up once through the proxy, cached, and refreshed by
-  clicking the flag; a gray flag marks a failed lookup and retries on
-  click.
+- **Connection country flags** — optional flag chips (off by default)
+  showing either a proxy's exit country or the direct connection's country.
+  Each is looked up over its matching connection, cached, and refreshed by
+  clicking the flag; a gray flag marks a failed lookup and retries on click.
 - **Connection test** — verify a profile before saving: requests to four
   IP-echo services race through the candidate proxy (everything else
   keeps the current routing); the first success reports latency and the
   exit IP, so one service being down or blocklisted cannot fail the test.
-- **Backup & restore** — export all profiles to a JSON file; re-import
-  from file or by drag & drop.
+- **Backup & restore** — export all profiles and direct-connection settings
+  to a JSON file; re-import from file or by drag & drop.
 - **Themes** — system / light / dark popup appearance.
 - **No analytics, no telemetry.**
 
@@ -85,8 +86,9 @@ The built xpi is intentionally not tracked in git (see `.gitignore`).
 - `bypass.js` — bypass-rule grammar shared by the router and the popup:
   compiles `[scheme://]host[:port][/path][?query]` wildcard patterns and
   matches request URLs against them.
-- `popup/` — browser-action UI: profile list, add/edit/clone form with
-  connection test, settings (theme, export/import).
+- `popup/` — browser-action UI: connection list, direct-connection editor,
+  sectioned add/edit/clone proxy form with connection test, and settings
+  (theme, export/import).
 - `icons/` — extension and toolbar icons.
 
 ## Privacy
@@ -97,10 +99,11 @@ manifest: it collects no data. Profiles and settings live only in
 beyond your configured proxies are the IP-echo requests (`api.ipify.org`,
 `www.cloudflare.com/cdn-cgi/trace`, `ifconfig.me`,
 `checkip.amazonaws.com`) made when you explicitly click *Test* on a
-profile, and — only for profiles with *Show Proxy Country* enabled — the
-exit-country lookups (`www.cloudflare.com/cdn-cgi/trace`,
+profile, and — only for connections with their country display enabled —
+the country lookups (`www.cloudflare.com/cdn-cgi/trace`,
 `one.one.one.one/cdn-cgi/trace`, `get.geojs.io`, `ipapi.co`), sent
-through that proxy once and cached until you refresh them.
+through the corresponding proxy or direct connection once and cached until
+you refresh them.
 
 ## License
 
