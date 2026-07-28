@@ -572,12 +572,10 @@ button:focus-visible { outline: 2px solid var(--accent1); outline-offset: 2px; }
 .form-section {
   padding-bottom: 16px;
   margin-bottom: 14px;
-  border-bottom: 1px solid var(--border);
 }
 .form-section:last-child {
   padding-bottom: 2px;
   margin-bottom: 0;
-  border-bottom: 0;
 }
 .form-section-label {
   margin: 0 2px 11px;
@@ -912,7 +910,15 @@ button:focus-visible { outline: 2px solid var(--accent1); outline-offset: 2px; }
   justify-content: center;
   gap: 7px;
   padding: 10px;
+  background: var(--accent-softer);
+  border-color: var(--accent-border);
+  color: var(--accent-text);
   font-size: 12px;
+}
+.settings-btn:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent1);
+  color: var(--accent1);
 }
 
 .drop-zone {
