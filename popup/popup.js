@@ -13,7 +13,7 @@ const PALETTE = ['#f5a524', '#f97316', '#ef4444', '#ec4899', '#8b5cf6',
 // palette so the default is always selectable again.
 const DEFAULT_DIRECT_COLOR = '#7f8ea6';
 const DIRECT_PALETTE = [DEFAULT_DIRECT_COLOR, ...PALETTE];
-const DEFAULT_DIRECT = { color: DEFAULT_DIRECT_COLOR, showCountry: false };
+const DEFAULT_DIRECT = { color: DEFAULT_DIRECT_COLOR, showCountry: false, showIp: false };
 
 const TRASH_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>';
 
@@ -80,6 +80,7 @@ const fBypassLan = $('fBypassLan');
 const fPersistent = $('fPersistent');
 const fShowCountry = $('fShowCountry');
 const fDirectShowCountry = $('fDirectShowCountry');
+const fDirectShowIp = $('fDirectShowIp');
 
 const bypassHeader = $('bypassHeader');
 const bypassChevron = $('bypassChevron');
@@ -526,6 +527,61 @@ async function refreshCountry(id) {
   repaintFlag(id);
 }
 
+// --- Real-IP display (direct connection) ------------------------------------
+// With "Show IP Address" on, the direct card names the machine's real public
+// IP where it otherwise says "No proxy — use your real IP". The background
+// service resolves it with the same race the connection test runs and caches
+// the answer with a timestamp; the popup re-resolves once every 24 hours.
+
+const IP_TTL_MS = 24 * 60 * 60 * 1000;
+let ipFetching = false;     // a lookup is in flight
+let ipLookupFailed = false; // the last lookup failed (this popup session)
+
+function ipFresh() {
+  const d = state.direct;
+  return Boolean(d.ip) && Number.isFinite(d.ipFetchedAt) &&
+    Date.now() - d.ipFetchedAt < IP_TTL_MS;
+}
+
+function directAddrText() {
+  const d = state.direct;
+  if (!d.showIp) return 'No proxy — use your real IP';
+  if (ipFresh()) return d.ip;
+  if (ipFetching) return d.ip || 'Looking up your IP address…';
+  if (ipLookupFailed) return d.ip || 'IP address lookup failed';
+  return d.ip || 'Looking up your IP address…';
+}
+
+// Rewrites the direct card's address line in place, so lookups never rebuild
+// the list.
+function repaintDirectAddr() {
+  const card = proxyList.querySelector('.proxy-card[data-id="direct"]');
+  const addr = card && card.querySelector('.proxy-addr');
+  if (addr) addr.textContent = directAddrText();
+}
+
+async function refreshIp() {
+  if (ipFetching) return;
+  ipFetching = true;
+  ipLookupFailed = false;
+  repaintDirectAddr();
+
+  let res = null;
+  try {
+    res = await browser.runtime.sendMessage({ type: 'fetchIp', connectionId: 'direct' });
+  } catch (err) { /* background unreachable — treated as a failed lookup */ }
+
+  ipFetching = false;
+  if (res && res.ok) {
+    // The background service already persisted the address; mirror it locally.
+    state.direct.ip = res.ip;
+    state.direct.ipFetchedAt = res.fetchedAt;
+  } else {
+    ipLookupFailed = true;
+  }
+  repaintDirectAddr();
+}
+
 // --- Rendering --------------------------------------------------------------
 
 // Ids currently on screen. Cards already in this set skip the entry
@@ -581,7 +637,8 @@ function makeDirectCard(wasShown) {
     if (!direct.country && !countryFailed.has('direct')) refreshCountry('direct');
     meta.appendChild(makeFlag(direct));
   }
-  meta.appendChild(h('span', 'proxy-addr', 'No proxy — use your real IP'));
+  meta.appendChild(h('span', 'proxy-addr', directAddrText()));
+  if (direct.showIp && !ipFresh() && !ipLookupFailed) refreshIp();
   info.appendChild(meta);
   card.appendChild(info);
 
@@ -1042,6 +1099,7 @@ function startDirectEdit() {
   directFormScroll.scrollTop = 0;
   selectedDirectColor = state.direct.color;
   fDirectShowCountry.checked = state.direct.showCountry;
+  fDirectShowIp.checked = state.direct.showIp;
   renderDirectSwatches();
   showView(directFormView);
   const activeSwatch = directColorRow.querySelector('.swatch.active');
@@ -1054,6 +1112,7 @@ async function onDirectSubmit(e) {
     ...state.direct,
     color: selectedDirectColor,
     showCountry: fDirectShowCountry.checked,
+    showIp: fDirectShowIp.checked,
   };
   await browser.storage.local.set({ direct: state.direct });
   showView(listView);
@@ -1310,6 +1369,10 @@ function validateBackup(parsed) {
   return { proxies, selectedId, direct, skipped };
 }
 
+// Same acceptance as the background's normalizeIp: IPv4 or IPv6 literals only.
+const isIpLiteral = s =>
+  /^\d{1,3}(\.\d{1,3}){3}$/.test(s) || (s.includes(':') && /^[0-9a-fA-F:.]{2,45}$/.test(s));
+
 function sanitizeDirect(raw) {
   const direct = { ...DEFAULT_DIRECT };
   if (!raw || typeof raw !== 'object') return direct;
@@ -1319,6 +1382,14 @@ function sanitizeDirect(raw) {
   direct.showCountry = Boolean(raw.showCountry);
   const cc = typeof raw.country === 'string' ? raw.country.trim().toUpperCase() : '';
   if (/^[A-Z]{2}$/.test(cc)) direct.country = cc;
+  direct.showIp = Boolean(raw.showIp);
+  const ip = typeof raw.ip === 'string' ? raw.ip.trim() : '';
+  if (isIpLiteral(ip)) {
+    direct.ip = ip; // keep the cached address and its age, so imports stay fresh
+    if (Number.isFinite(raw.ipFetchedAt) && raw.ipFetchedAt > 0) {
+      direct.ipFetchedAt = raw.ipFetchedAt;
+    }
+  }
   return direct;
 }
 

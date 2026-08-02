@@ -12,13 +12,13 @@
  *   schemaVersion: 1,
  *   proxies: [{ id, name, type, host, port, color?, username?, password?, proxyDNS,
  *              bypassLan?, bypass?, persistent?, showCountry?, country? }],
- *   direct: { color, showCountry, country? },
+ *   direct: { color, showCountry, country?, showIp?, ip?, ipFetchedAt? },
  *   selectedId: 'direct' | <proxy id>
  * }
  */
 
 const DEFAULT_DIRECT_COLOR = '#7f8ea6';
-const DEFAULT_DIRECT = { color: DEFAULT_DIRECT_COLOR, showCountry: false };
+const DEFAULT_DIRECT = { color: DEFAULT_DIRECT_COLOR, showCountry: false, showIp: false };
 
 const DEFAULT_STATE = {
   schemaVersion: 1,
@@ -38,6 +38,14 @@ function normalizeDirectSettings(raw) {
   direct.showCountry = Boolean(raw.showCountry);
   const cc = typeof raw.country === 'string' ? raw.country.trim().toUpperCase() : '';
   if (/^[A-Z]{2}$/.test(cc)) direct.country = cc;
+  direct.showIp = Boolean(raw.showIp);
+  const ip = normalizeIp(raw.ip);
+  if (ip) {
+    direct.ip = ip;
+    if (Number.isFinite(raw.ipFetchedAt) && raw.ipFetchedAt > 0) {
+      direct.ipFetchedAt = raw.ipFetchedAt;
+    }
+  }
   return direct;
 }
 
@@ -305,10 +313,11 @@ function describeProbeFailure(err) {
 }
 
 browser.runtime.onMessage.addListener(async msg => {
-  if (!msg || (msg.type !== 'testProxy' && msg.type !== 'fetchCountry')) {
+  if (!msg || (msg.type !== 'testProxy' && msg.type !== 'fetchCountry' && msg.type !== 'fetchIp')) {
     return undefined;
   }
-  const directLookup = msg.type === 'fetchCountry' && msg.connectionId === 'direct';
+  const directLookup = msg.type === 'fetchIp' ||
+    (msg.type === 'fetchCountry' && msg.connectionId === 'direct');
   const proxy = directLookup ? null : msg.proxy;
   if (!directLookup && (!proxy || !validProxyConfig(proxy))) {
     return { ok: false, error: 'Invalid proxy configuration' };
@@ -318,6 +327,26 @@ browser.runtime.onMessage.addListener(async msg => {
     try {
       const { value, ms } = await raceThroughConnection(TEST_ENDPOINTS, proxy);
       return { ok: true, ip: value, ms };
+    } catch (err) {
+      return { ok: false, error: describeProbeFailure(err) };
+    }
+  }
+
+  // fetchIp — resolve the machine's real public IP over the direct route.
+  // The race is the connection test's: same IP services, same deadline. The
+  // answer is cached with its fetch time so the popup can re-resolve it once
+  // every 24 hours instead of on every opening.
+  if (msg.type === 'fetchIp') {
+    try {
+      const { value } = await raceThroughConnection(TEST_ENDPOINTS, null);
+      const fetchedAt = Date.now();
+      await stateReady;
+      if (state.direct.showIp) {
+        state.direct.ip = value;
+        state.direct.ipFetchedAt = fetchedAt;
+        await browser.storage.local.set({ direct: state.direct });
+      }
+      return { ok: true, ip: value, fetchedAt };
     } catch (err) {
       return { ok: false, error: describeProbeFailure(err) };
     }

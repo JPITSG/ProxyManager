@@ -238,6 +238,17 @@
 
               <div class="toggle-row">
                 <div>
+                  <div class="label">Show IP Address</div>
+                  <div class="hint" data-tip="The address comes from a direct request — at most once every 24 hours, then it's cached.&#10;Services raced: api.ipify.org &middot; www.cloudflare.com &middot; ifconfig.me &middot; checkip.amazonaws.com">Shows your real IP address in the list; refreshed once every 24 hours</div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="fDirectShowIp">
+                  <span class="slider"></span>
+                </label>
+              </div>
+
+              <div class="toggle-row">
+                <div>
                   <div class="label">Show Connection Country</div>
                   <div class="hint" data-tip="The country comes from a direct request — only once, then it's cached. Click the flag in the list to refresh it.&#10;Services raced: www.cloudflare.com &middot; one.one.one.one &middot; geojs.io &middot; ipapi.co">Flags your connection country in the list; looked up once, then cached</div>
                 </div>
