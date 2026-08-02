@@ -195,6 +195,17 @@
 
               <div class="toggle-row">
                 <div>
+                  <div class="label">Show Proxy IP</div>
+                  <div class="hint" data-tip="The address comes from a request sent through this proxy — at most once every 24 hours, then it's cached. Click the address in the list to refresh it.&#10;Services raced: api.ipify.org &middot; www.cloudflare.com &middot; ifconfig.me &middot; checkip.amazonaws.com">Shows the exit IP in the proxy list; refreshed once every 24 hours</div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="fShowIp">
+                  <span class="slider"></span>
+                </label>
+              </div>
+
+              <div class="toggle-row">
+                <div>
                   <div class="label">Show Proxy Country</div>
                   <div class="hint" data-tip="The country comes from a request sent through this proxy — only once, then it's cached. Click the flag in the list to refresh it.&#10;Services raced: www.cloudflare.com &middot; one.one.one.one &middot; geojs.io &middot; ipapi.co">Flags the exit country in the proxy list; looked up once, then cached</div>
                 </div>

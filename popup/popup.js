@@ -79,6 +79,7 @@ const fDns = $('fDns');
 const fBypassLan = $('fBypassLan');
 const fPersistent = $('fPersistent');
 const fShowCountry = $('fShowCountry');
+const fShowIp = $('fShowIp');
 const fDirectShowCountry = $('fDirectShowCountry');
 const fDirectShowIp = $('fDirectShowIp');
 
@@ -527,59 +528,188 @@ async function refreshCountry(id) {
   repaintFlag(id);
 }
 
-// --- Real-IP display (direct connection) ------------------------------------
-// With "Show IP Address" on, the direct card names the machine's real public
-// IP where it otherwise says "No proxy — use your real IP". The background
-// service resolves it with the same race the connection test runs and caches
-// the answer with a timestamp; the popup re-resolves once every 24 hours.
+// --- Real-IP display ---------------------------------------------------------
+// With "Show IP Address" on, a connection's card names its real public IP:
+// the direct card shows it where it otherwise says "No proxy — use your real
+// IP"; a proxy card cycles its address line between the configured host:port
+// and the resolved exit IP — a slow fade, a dwell on each line, and hovering
+// the line holds the cycle still. The background service resolves addresses
+// with the same race the connection test runs and caches each answer with a
+// timestamp; the popup re-resolves once every 24 hours. A resolved line
+// behaves like the country flag: hover names the address, click re-resolves
+// it.
 
 const IP_TTL_MS = 24 * 60 * 60 * 1000;
-let ipFetching = false;     // a lookup is in flight
-let ipLookupFailed = false; // the last lookup failed (this popup session)
+const ADDR_FADE_MS = 800;   // the cross-fade between host:port and the real IP
+const ADDR_DWELL_MS = 4000; // the pause on each line once it has faded in
 
-function ipFresh() {
-  const d = state.direct;
-  return Boolean(d.ip) && Number.isFinite(d.ipFetchedAt) &&
-    Date.now() - d.ipFetchedAt < IP_TTL_MS;
+const ipFetches = new Set();  // connection ids with a lookup in flight
+const ipFailed = new Set();   // ids whose last lookup failed (this popup)
+const addrCycles = new Map(); // proxy id -> { el, phase, fading, hovered, nextAt }
+let addrCycleTimer = 0;
+
+function ipFresh(p) {
+  return Boolean(p.ip) && Number.isFinite(p.ipFetchedAt) &&
+    Date.now() - p.ipFetchedAt < IP_TTL_MS;
 }
 
-function directAddrText() {
-  const d = state.direct;
-  if (!d.showIp) return 'No proxy — use your real IP';
-  if (ipFresh()) return d.ip;
-  if (ipFetching) return d.ip || 'Looking up your IP address…';
-  if (ipLookupFailed) return d.ip || 'IP address lookup failed';
-  return d.ip || 'Looking up your IP address…';
+// The real-IP half of the line: the cached address, a progress note while
+// the lookup runs, or the failure fallback — same wording on every card.
+function ipLineText(p) {
+  if (ipFresh(p)) return p.ip;
+  if (ipFetches.has(p.id)) return p.ip || 'Looking up your IP address…';
+  if (ipFailed.has(p.id)) return p.ip || 'IP address lookup failed';
+  return p.ip || 'Looking up your IP address…';
 }
 
-// Rewrites the direct card's address line in place, so lookups never rebuild
-// the list.
-function repaintDirectAddr() {
-  const card = proxyList.querySelector('.proxy-card[data-id="direct"]');
-  const addr = card && card.querySelector('.proxy-addr');
-  if (addr) addr.textContent = directAddrText();
+// Same wording as the country flag's tooltip: the value with a refresh hint,
+// a progress note while looking up, a retry hint after a failure.
+function ipTipText(p) {
+  const direct = p.id === 'direct';
+  if (p.ip) return (direct ? 'Connection IP' : 'Exit IP') + ': ' + p.ip + '\nClick to refresh';
+  if (ipFetches.has(p.id)) return 'Looking up the ' + (direct ? 'connection' : 'exit') + ' IP…';
+  return 'IP unknown — the lookup failed\nClick to retry';
 }
 
-async function refreshIp() {
-  if (ipFetching) return;
-  ipFetching = true;
-  ipLookupFailed = false;
-  repaintDirectAddr();
+function clearAddrTip(el) {
+  el.removeAttribute('data-tip');
+  el.removeAttribute('aria-label');
+}
+
+// The direct card's address line: a plain note while the setting is off,
+// otherwise a flag-style button showing the machine's real address.
+function makeDirectAddr(direct) {
+  if (!direct.showIp) return h('span', 'proxy-addr', 'No proxy — use your real IP');
+  const el = h('button', 'proxy-addr', ipLineText(direct));
+  el.type = 'button';
+  setTip(el, ipTipText(direct));
+  el.addEventListener('click', e => {
+    e.stopPropagation(); // a card click would switch the connection
+    refreshIp('direct');
+  });
+  return el;
+}
+
+// A showIp proxy's address line cycles host:port ↔ exit IP. Clicking lands
+// only while the exit IP is up — like the flag, it re-resolves the address.
+function makeCyclingAddr(p) {
+  const el = h('button', 'proxy-addr', p.host + ':' + p.port);
+  el.type = 'button';
+  el.addEventListener('click', e => {
+    e.stopPropagation(); // a card click would switch the connection
+    const c = addrCycles.get(p.id);
+    if (c && c.phase === 'ip') refreshIp(p.id);
+  });
+  startAddrCycle(p, el);
+  return el;
+}
+
+function startAddrCycle(p, el) {
+  addrCycles.set(p.id, {
+    el, phase: 'addr', fading: false, hovered: false,
+    nextAt: Date.now() + ADDR_DWELL_MS,
+  });
+  el.addEventListener('mouseenter', () => {
+    const c = addrCycles.get(p.id);
+    if (c) c.hovered = true;
+  });
+  el.addEventListener('mouseleave', () => {
+    const c = addrCycles.get(p.id);
+    if (c) c.hovered = false;
+  });
+  if (!addrCycleTimer) addrCycleTimer = setInterval(tickAddrCycles, 200);
+}
+
+function stopAddrCycles() {
+  addrCycles.clear(); // the tick then stops its own timer
+}
+
+function tickAddrCycles() {
+  const now = Date.now();
+  addrCycles.forEach((c, id) => {
+    if (!c.el.isConnected) { addrCycles.delete(id); return; } // card went away
+    if (now < c.nextAt) return;
+    if (c.hovered && !c.fading) { c.nextAt = now + 300; return; } // held under the cursor
+    advanceAddrCycle(id, c);
+  });
+  if (addrCycles.size === 0) {
+    clearInterval(addrCycleTimer);
+    addrCycleTimer = 0;
+  }
+}
+
+function advanceAddrCycle(id, c) {
+  const p = state.proxies.find(x => x.id === id);
+  if (!p || !p.showIp) { addrCycles.delete(id); return; }
+  if (!c.fading) {
+    c.el.classList.add('fading'); // fade out; the text swaps when it ends
+    c.fading = true;
+    c.nextAt = Date.now() + ADDR_FADE_MS;
+    return;
+  }
+  c.fading = false;
+  if (c.phase === 'addr') {
+    c.phase = 'ip';
+    c.el.textContent = ipLineText(p);
+    setTip(c.el, ipTipText(p));
+  } else {
+    c.phase = 'addr';
+    c.el.textContent = p.host + ':' + p.port;
+    clearAddrTip(c.el); // no tooltip over the configured address
+  }
+  c.el.classList.remove('fading');
+  c.nextAt = Date.now() + ADDR_DWELL_MS;
+}
+
+// Rewrites one card's address line in place, so lookups never rebuild the
+// list. On a cycling line only the exit-IP half is refreshed; the host:port
+// half never changes.
+function repaintAddr(id) {
+  if (id === 'direct') {
+    const card = proxyList.querySelector('.proxy-card[data-id="direct"]');
+    const addr = card && card.querySelector('.proxy-addr');
+    if (addr && state.direct.showIp) {
+      const direct = getConnection('direct');
+      addr.textContent = ipLineText(direct);
+      setTip(addr, ipTipText(direct));
+    }
+    return;
+  }
+  const c = addrCycles.get(id);
+  const p = state.proxies.find(x => x.id === id);
+  if (!c || !p || c.phase !== 'ip') return;
+  c.el.textContent = ipLineText(p);
+  setTip(c.el, ipTipText(p));
+}
+
+async function refreshIp(id) {
+  const p = getConnection(id);
+  if (!p || ipFetches.has(id)) return;
+  ipFetches.add(id);
+  ipFailed.delete(id);
+  repaintAddr(id);
 
   let res = null;
   try {
-    res = await browser.runtime.sendMessage({ type: 'fetchIp', connectionId: 'direct' });
+    res = await browser.runtime.sendMessage(id === 'direct'
+      ? { type: 'fetchIp', connectionId: 'direct' }
+      : { type: 'fetchIp', proxy: p });
   } catch (err) { /* background unreachable — treated as a failed lookup */ }
 
-  ipFetching = false;
+  ipFetches.delete(id);
   if (res && res.ok) {
     // The background service already persisted the address; mirror it locally.
-    state.direct.ip = res.ip;
-    state.direct.ipFetchedAt = res.fetchedAt;
+    if (id === 'direct') {
+      state.direct.ip = res.ip;
+      state.direct.ipFetchedAt = res.fetchedAt;
+    } else {
+      const cur = state.proxies.find(x => x.id === id);
+      if (cur) { cur.ip = res.ip; cur.ipFetchedAt = res.fetchedAt; }
+    }
   } else {
-    ipLookupFailed = true;
+    ipFailed.add(id);
   }
-  repaintDirectAddr();
+  repaintAddr(id);
 }
 
 // --- Rendering --------------------------------------------------------------
@@ -593,6 +723,7 @@ function renderList() {
   const wasShown = shownIds;
   shownIds = new Set(['direct', ...state.proxies.map(p => p.id)]);
 
+  stopAddrCycles(); // the old cards' fade timers die with their elements
   proxyList.replaceChildren();
   proxyList.appendChild(makeDirectCard(wasShown));
 
@@ -637,8 +768,8 @@ function makeDirectCard(wasShown) {
     if (!direct.country && !countryFailed.has('direct')) refreshCountry('direct');
     meta.appendChild(makeFlag(direct));
   }
-  meta.appendChild(h('span', 'proxy-addr', directAddrText()));
-  if (direct.showIp && !ipFresh() && !ipLookupFailed) refreshIp();
+  meta.appendChild(makeDirectAddr(direct));
+  if (direct.showIp && !ipFresh(direct) && !ipFailed.has('direct')) refreshIp('direct');
   info.appendChild(meta);
   card.appendChild(info);
 
@@ -678,7 +809,12 @@ function makeCard(p, index, wasShown) {
     if (!p.country && !countryFailed.has(p.id)) refreshCountry(p.id);
     meta.appendChild(makeFlag(p));
   }
-  meta.appendChild(h('span', 'proxy-addr', p.host + ':' + p.port));
+  if (p.showIp) {
+    meta.appendChild(makeCyclingAddr(p));
+    if (!ipFresh(p) && !ipFailed.has(p.id)) refreshIp(p.id);
+  } else {
+    meta.appendChild(h('span', 'proxy-addr', p.host + ':' + p.port));
+  }
   info.appendChild(meta);
   card.appendChild(info);
 
@@ -783,7 +919,7 @@ let suppressClick = false;   // swallows the click a finished drag fires
 
 function onCardPointerDown(e, card, index) {
   if (drag || e.button !== 0 || state.proxies.length < 2) return;
-  if (e.target.closest('.card-actions, .country-flag')) return; // buttons on the card
+  if (e.target.closest('.card-actions, .country-flag, button.proxy-addr')) return; // buttons on the card
   drag = {
     card,
     index,
@@ -1048,6 +1184,7 @@ function resetForm() {
   authFields.classList.remove('open');
   fDns.checked = true;
   fShowCountry.checked = false;
+  fShowIp.checked = false;
   bypassRules.replaceChildren();
   setBypassOpen(false);
   updateBypassHint();
@@ -1083,6 +1220,7 @@ function startEdit(id) {
   fBypassLan.checked = Boolean(p.bypassLan);
   fPersistent.checked = Boolean(p.persistent);
   fShowCountry.checked = Boolean(p.showCountry);
+  fShowIp.checked = Boolean(p.showIp);
 
   bypassRules.replaceChildren();
   (Array.isArray(p.bypass) ? p.bypass : []).forEach(rule => addRuleRow(rule));
@@ -1144,6 +1282,7 @@ function readForm() {
     bypass: readRuleInputs(),
     persistent: fPersistent.checked,
     showCountry: fShowCountry.checked,
+    showIp: fShowIp.checked,
   };
 
   if (authToggle.checked && fUser.value.trim()) {
@@ -1415,9 +1554,17 @@ function sanitizeProxy(raw) {
       : [],
     persistent: Boolean(raw.persistent),
     showCountry: Boolean(raw.showCountry),
+    showIp: Boolean(raw.showIp),
   };
   const cc = typeof raw.country === 'string' ? raw.country.trim().toUpperCase() : '';
   if (/^[A-Z]{2}$/.test(cc)) p.country = cc; // keep the cached exit country
+  const ip = typeof raw.ip === 'string' ? raw.ip.trim() : '';
+  if (isIpLiteral(ip)) {
+    p.ip = ip; // keep the cached exit address and its age, so imports stay fresh
+    if (Number.isFinite(raw.ipFetchedAt) && raw.ipFetchedAt > 0) {
+      p.ipFetchedAt = raw.ipFetchedAt;
+    }
+  }
   if (typeof raw.username === 'string' && raw.username) {
     p.username = raw.username;
     p.password = typeof raw.password === 'string' ? raw.password : '';

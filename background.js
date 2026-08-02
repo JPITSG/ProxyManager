@@ -11,7 +11,8 @@
  * {
  *   schemaVersion: 1,
  *   proxies: [{ id, name, type, host, port, color?, username?, password?, proxyDNS,
- *              bypassLan?, bypass?, persistent?, showCountry?, country? }],
+ *              bypassLan?, bypass?, persistent?, showCountry?, country?,
+ *              showIp?, ip?, ipFetchedAt? }],
  *   direct: { color, showCountry, country?, showIp?, ip?, ipFetchedAt? },
  *   selectedId: 'direct' | <proxy id>
  * }
@@ -316,8 +317,8 @@ browser.runtime.onMessage.addListener(async msg => {
   if (!msg || (msg.type !== 'testProxy' && msg.type !== 'fetchCountry' && msg.type !== 'fetchIp')) {
     return undefined;
   }
-  const directLookup = msg.type === 'fetchIp' ||
-    (msg.type === 'fetchCountry' && msg.connectionId === 'direct');
+  const directLookup = (msg.type === 'fetchCountry' || msg.type === 'fetchIp') &&
+    msg.connectionId === 'direct';
   const proxy = directLookup ? null : msg.proxy;
   if (!directLookup && (!proxy || !validProxyConfig(proxy))) {
     return { ok: false, error: 'Invalid proxy configuration' };
@@ -332,19 +333,29 @@ browser.runtime.onMessage.addListener(async msg => {
     }
   }
 
-  // fetchIp — resolve the machine's real public IP over the direct route.
-  // The race is the connection test's: same IP services, same deadline. The
-  // answer is cached with its fetch time so the popup can re-resolve it once
-  // every 24 hours instead of on every opening.
+  // fetchIp — resolve the connection's public IP: the machine's real address
+  // over the direct route, the exit address through a proxy. The race is the
+  // connection test's either way: same IP services, same deadline. The answer
+  // is cached with its fetch time so the popup can re-resolve it once every
+  // 24 hours instead of on every opening.
   if (msg.type === 'fetchIp') {
     try {
-      const { value } = await raceThroughConnection(TEST_ENDPOINTS, null);
+      const { value } = await raceThroughConnection(TEST_ENDPOINTS, proxy);
       const fetchedAt = Date.now();
       await stateReady;
-      if (state.direct.showIp) {
-        state.direct.ip = value;
-        state.direct.ipFetchedAt = fetchedAt;
-        await browser.storage.local.set({ direct: state.direct });
+      if (directLookup) {
+        if (state.direct.showIp) {
+          state.direct.ip = value;
+          state.direct.ipFetchedAt = fetchedAt;
+          await browser.storage.local.set({ direct: state.direct });
+        }
+      } else {
+        const entry = state.proxies.find(x => x.id === proxy.id);
+        if (entry && entry.showIp) {
+          entry.ip = value;
+          entry.ipFetchedAt = fetchedAt;
+          await browser.storage.local.set({ proxies: state.proxies });
+        }
       }
       return { ok: true, ip: value, fetchedAt };
     } catch (err) {

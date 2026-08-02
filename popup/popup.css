@@ -401,7 +401,21 @@ main { position: relative; z-index: 1; padding: 0 18px 18px; }
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  /* the slow cross-fade when a line cycles host:port ↔ real IP
+     (JS toggles .fading for the fade-out half) */
+  transition: opacity 0.8s ease;
 }
+.proxy-addr.fading { opacity: 0; }
+
+/* Clickable address lines (the real-IP display) behave like the country
+   flag chip: hover names the address, click re-resolves it. */
+button.proxy-addr {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+button.proxy-addr:hover { color: var(--text); }
 
 .type-badge {
   font-size: 9px;
