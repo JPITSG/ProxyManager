@@ -63,6 +63,9 @@
 :root[data-theme="light"] #proxyList.reordering .proxy-card.dragging { box-shadow: 0 10px 24px rgba(18, 26, 38, 0.22); }
 :root[data-theme="light"] .radio { border-color: #b9c1d0; }
 :root[data-theme="light"] .type-badge.direct { background: rgba(18, 26, 38, 0.07); }
+/* on the barely-tinted light chip the dark-theme light blue text washes out;
+   a deep blue keeps the blue-on-blue scheme but with readable contrast */
+:root[data-theme="light"] .type-badge.http { color: #075985; }
 :root[data-theme="light"] .btn-ghost:hover {
   border-color: rgba(18, 26, 38, 0.22);
   background: rgba(18, 26, 38, 0.04);
@@ -407,11 +410,14 @@ main { position: relative; z-index: 1; padding: 0 18px 18px; }
   padding: 2.5px 6px;
   border-radius: 4px;
   flex-shrink: 0;
-  /* explicit height, shared with .country-flag so the two chips match */
+  /* explicit height, shared with .country-flag so the two chips match.
+     Width comes from JS (equalizeBadgeWidths): every badge takes the width
+     of the widest one in the list, so center the label inside it. */
   box-sizing: border-box;
   height: 16px;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
 }
 .type-badge.http { background: rgba(56, 189, 248, 0.14); color: #62c8fa; }
 .type-badge.https { background: rgba(251, 191, 36, 0.15); color: #fbbf24; }

@@ -552,6 +552,15 @@ function renderList() {
 
   updateStatus();
   updateScrollLanes();
+  equalizeBadgeWidths();
+}
+
+// Every type badge gets the width of the widest one currently shown, so the
+// HTTP / HTTPS / SOCKS5 / SOCKS4 / DIRECT chips all render at the same size.
+function equalizeBadgeWidths() {
+  const badges = [...proxyList.querySelectorAll('.type-badge')];
+  const max = Math.max(0, ...badges.map(b => b.offsetWidth));
+  badges.forEach(b => { b.style.width = max + 'px'; });
 }
 
 function makeDirectCard(wasShown) {
