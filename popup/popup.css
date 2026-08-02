@@ -408,14 +408,16 @@ main { position: relative; z-index: 1; padding: 0 18px 18px; }
 .proxy-addr.fading { opacity: 0; }
 
 /* Clickable address lines (the real-IP display) behave like the country
-   flag chip: hover names the address, click re-resolves it. */
+   flag chip: hover names the address, click re-resolves it. The finger
+   pointer and the hover highlight only appear while the line is actually
+   actionable — showing a real IP that can be refreshed. */
 button.proxy-addr {
   background: none;
   border: none;
   padding: 0;
-  cursor: pointer;
 }
-button.proxy-addr:hover { color: var(--text); }
+button.proxy-addr.actionable { cursor: pointer; }
+button.proxy-addr.actionable:hover { color: var(--text); }
 
 .type-badge {
   font-size: 9px;

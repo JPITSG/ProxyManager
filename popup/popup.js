@@ -532,8 +532,10 @@ async function refreshCountry(id) {
 // With "Show IP Address" on, a connection's card names its real public IP:
 // the direct card shows it where it otherwise says "No proxy — use your real
 // IP"; a proxy card cycles its address line between the configured host:port
-// and the resolved exit IP — a slow fade, a dwell on each line, and hovering
-// the line holds the cycle still. The background service resolves addresses
+// and the resolved exit IP — a slow fade and a dwell on each line, every
+// card marching to one shared timetable. Hovering a line holds its cycle
+// still; on release it waits for the loop to come back around, so all lines
+// fade together again. The background service resolves addresses
 // with the same race the connection test runs and caches each answer with a
 // timestamp; the popup re-resolves once every 24 hours. A resolved line
 // behaves like the country flag: hover names the address, click re-resolves
@@ -541,11 +543,29 @@ async function refreshCountry(id) {
 
 const IP_TTL_MS = 24 * 60 * 60 * 1000;
 const ADDR_FADE_MS = 800;   // the cross-fade between host:port and the real IP
-const ADDR_DWELL_MS = 4000; // the pause on each line once it has faded in
+const ADDR_DWELL_MS = 3000; // the pause on each line once it has faded in
+const ADDR_HALF_MS = ADDR_DWELL_MS + ADDR_FADE_MS; // one host:port or real-IP stint
+const ADDR_LOOP_MS = 2 * ADDR_HALF_MS;             // a full there-and-back loop
+
+// Every cycling line runs on one shared timetable, so all cards fade
+// together: fades start at the loop's 0 and HALF marks, the text swaps a
+// fade later (F and HALF+F). A line held under the cursor skips its turns
+// and rejoins when the loop comes back around to the state it paused in.
+const ADDR_STEP_AT = {
+  addr: 0,
+  'addr-fading': ADDR_FADE_MS,
+  ip: ADDR_HALF_MS,
+  'ip-fading': ADDR_HALF_MS + ADDR_FADE_MS,
+};
+
+// The next moment the shared loop reaches `state`'s step, at or after `now`.
+function addrStepTime(state, now) {
+  return now + (ADDR_STEP_AT[state] - (now % ADDR_LOOP_MS) + ADDR_LOOP_MS) % ADDR_LOOP_MS;
+}
 
 const ipFetches = new Set();  // connection ids with a lookup in flight
 const ipFailed = new Set();   // ids whose last lookup failed (this popup)
-const addrCycles = new Map(); // proxy id -> { el, phase, fading, hovered, nextAt }
+const addrCycles = new Map(); // proxy id -> { el, state, hovered, nextAt }
 let addrCycleTimer = 0;
 
 function ipFresh(p) {
@@ -580,7 +600,7 @@ function clearAddrTip(el) {
 // otherwise a flag-style button showing the machine's real address.
 function makeDirectAddr(direct) {
   if (!direct.showIp) return h('span', 'proxy-addr', 'No proxy — use your real IP');
-  const el = h('button', 'proxy-addr', ipLineText(direct));
+  const el = h('button', 'proxy-addr actionable', ipLineText(direct)); // always refreshable
   el.type = 'button';
   setTip(el, ipTipText(direct));
   el.addEventListener('click', e => {
@@ -598,24 +618,32 @@ function makeCyclingAddr(p) {
   el.addEventListener('click', e => {
     e.stopPropagation(); // a card click would switch the connection
     const c = addrCycles.get(p.id);
-    if (c && c.phase === 'ip') refreshIp(p.id);
+    if (c && c.state === 'ip') refreshIp(p.id);
   });
   startAddrCycle(p, el);
   return el;
 }
 
 function startAddrCycle(p, el) {
-  addrCycles.set(p.id, {
-    el, phase: 'addr', fading: false, hovered: false,
-    nextAt: Date.now() + ADDR_DWELL_MS,
-  });
+  // Join the shared timetable on whichever stint the loop is currently in:
+  // show the matching half right away, then take every following turn
+  // together with the other cards.
+  const inIpStint = (Date.now() % ADDR_LOOP_MS) < ADDR_HALF_MS;
+  const c = { el, state: inIpStint ? 'ip' : 'addr', hovered: false, nextAt: 0 };
+  if (inIpStint) {
+    el.textContent = ipLineText(p);
+    setTip(el, ipTipText(p));
+    el.classList.add('actionable');
+  }
+  c.nextAt = addrStepTime(c.state, Date.now());
+  addrCycles.set(p.id, c);
   el.addEventListener('mouseenter', () => {
-    const c = addrCycles.get(p.id);
-    if (c) c.hovered = true;
+    const cur = addrCycles.get(p.id);
+    if (cur) cur.hovered = true;
   });
   el.addEventListener('mouseleave', () => {
-    const c = addrCycles.get(p.id);
-    if (c) c.hovered = false;
+    const cur = addrCycles.get(p.id);
+    if (cur) cur.hovered = false;
   });
   if (!addrCycleTimer) addrCycleTimer = setInterval(tickAddrCycles, 200);
 }
@@ -629,7 +657,12 @@ function tickAddrCycles() {
   addrCycles.forEach((c, id) => {
     if (!c.el.isConnected) { addrCycles.delete(id); return; } // card went away
     if (now < c.nextAt) return;
-    if (c.hovered && !c.fading) { c.nextAt = now + 300; return; } // held under the cursor
+    if (c.hovered && !c.state.endsWith('-fading')) {
+      // Held under the cursor: skip this turn and wait for the loop to come
+      // back around to this state, so the line rejoins the others in sync.
+      c.nextAt = addrStepTime(c.state, now);
+      return;
+    }
     advanceAddrCycle(id, c);
   });
   if (addrCycles.size === 0) {
@@ -641,24 +674,23 @@ function tickAddrCycles() {
 function advanceAddrCycle(id, c) {
   const p = state.proxies.find(x => x.id === id);
   if (!p || !p.showIp) { addrCycles.delete(id); return; }
-  if (!c.fading) {
+  if (c.state === 'addr' || c.state === 'ip') {
     c.el.classList.add('fading'); // fade out; the text swaps when it ends
-    c.fading = true;
-    c.nextAt = Date.now() + ADDR_FADE_MS;
-    return;
-  }
-  c.fading = false;
-  if (c.phase === 'addr') {
-    c.phase = 'ip';
+    c.state += '-fading';
+  } else if (c.state === 'addr-fading') {
+    c.state = 'ip';
     c.el.textContent = ipLineText(p);
     setTip(c.el, ipTipText(p));
-  } else {
-    c.phase = 'addr';
+    c.el.classList.add('actionable');
+    c.el.classList.remove('fading');
+  } else { // 'ip-fading'
+    c.state = 'addr';
     c.el.textContent = p.host + ':' + p.port;
     clearAddrTip(c.el); // no tooltip over the configured address
+    c.el.classList.remove('actionable');
+    c.el.classList.remove('fading');
   }
-  c.el.classList.remove('fading');
-  c.nextAt = Date.now() + ADDR_DWELL_MS;
+  c.nextAt = addrStepTime(c.state, Date.now());
 }
 
 // Rewrites one card's address line in place, so lookups never rebuild the
@@ -677,7 +709,7 @@ function repaintAddr(id) {
   }
   const c = addrCycles.get(id);
   const p = state.proxies.find(x => x.id === id);
-  if (!c || !p || c.phase !== 'ip') return;
+  if (!c || !p || c.state !== 'ip') return;
   c.el.textContent = ipLineText(p);
   setTip(c.el, ipTipText(p));
 }
