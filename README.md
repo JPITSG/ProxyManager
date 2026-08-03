@@ -28,9 +28,11 @@ between them — or back to a direct connection — from the toolbar popup.
   `*.internal.example.com`, `localhost:8080`, `https://*.corp.com/admin*`.
 - **Persistent profile** — mark one profile as the home connection: it is
   selected automatically at browser startup, and when you switch away during
-  a session it takes the connection back after 5 minutes. While a switch-back
-  is pending, a countdown shows in the popup's header status line and on the
-  persistent profile's card (the pin chip becomes a timer).
+  a session it takes the connection back after a configurable delay (1
+  minute, 5, 15 or 60 — Settings → General; default 5 minutes). While a
+  switch-back is pending, a live countdown shows in the popup's header
+  status line and on the persistent profile's card (the pin chip becomes a
+  timer).
 - **Connection country flags** — optional flag chips (off by default)
   showing either a proxy's exit country or the direct connection's country.
   Each is looked up over its matching connection, cached, and refreshed by

@@ -185,7 +185,7 @@
               <div class="toggle-row">
                 <div>
                   <div class="label">Persistent</div>
-                  <div class="hint">Connects on startup, and again 5 minutes after you switch away</div>
+                  <div class="hint">Connects on startup, and takes the connection back after you switch away</div>
                 </div>
                 <label class="switch">
                   <input type="checkbox" id="fPersistent">
@@ -292,6 +292,15 @@
           <button type="button" data-theme="system" class="active">System</button>
           <button type="button" data-theme="light">Light</button>
           <button type="button" data-theme="dark">Dark</button>
+        </div>
+
+        <div class="form-section-label">General</div>
+        <p class="settings-desc">When you switch away from the persistent proxy, it takes the connection back after:</p>
+        <div class="segmented revert-delay-seg" id="revertDelaySeg">
+          <button type="button" data-min="1">1 min</button>
+          <button type="button" data-min="5" class="active">5 min</button>
+          <button type="button" data-min="15">15 min</button>
+          <button type="button" data-min="60">1 hour</button>
         </div>
 
         <div class="form-section-label">Backup &amp; Restore</div>

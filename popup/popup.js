@@ -73,6 +73,7 @@ const importFile = $('importFile');
 const dropZone = $('dropZone');
 const settingsMsg = $('settingsMsg');
 const themeSeg = $('themeSeg');
+const revertDelaySeg = $('revertDelaySeg');
 
 const fName = $('fName');
 const fHost = $('fHost');
@@ -95,7 +96,7 @@ const bypassHint = $('bypassHint');
 const bypassEmpty = $('bypassEmpty');
 const addRuleBtn = $('addRuleBtn');
 
-let state = { proxies: [], selectedId: 'direct', direct: { ...DEFAULT_DIRECT }, revertAt: null };
+let state = { proxies: [], selectedId: 'direct', direct: { ...DEFAULT_DIRECT }, revertAt: null, revertDelayMin: 5 };
 let currentType = 'http';
 let selectedColor = PALETTE[0];
 let selectedDirectColor = DEFAULT_DIRECT_COLOR;
@@ -140,6 +141,7 @@ async function init() {
     direct: DEFAULT_DIRECT,
     theme: 'system',
     revertAt: null,
+    revertDelayMin: 5,
   });
   if (!Array.isArray(state.proxies)) state.proxies = [];
   state.direct = sanitizeDirect(state.direct);
@@ -149,6 +151,13 @@ async function init() {
   themeSeg.querySelectorAll('button').forEach(b => {
     b.classList.toggle('active', b.dataset.theme === themePreference);
   });
+
+  // Reflect the saved switch-back delay; a hand-edited value that matches no
+  // preset shows the default instead of leaving the row blank.
+  const delayButtons = [...revertDelaySeg.querySelectorAll('button')];
+  const delayMatch = delayButtons.find(b => Number(b.dataset.min) === Number(state.revertDelayMin))
+    || delayButtons.find(b => b.dataset.min === '5');
+  delayButtons.forEach(b => b.classList.toggle('active', b === delayMatch));
 
   // One-time migration: assign identity colors to proxies saved before
   // colors existed.
@@ -191,6 +200,21 @@ function bindEvents() {
       });
       await browser.storage.local.set({ theme: themePreference });
       applyThemeMode();
+    });
+  });
+
+  // Switch-back delay presets. The background echoes a fresh revertAt when
+  // the setting changes, so a countdown already running restarts at the new
+  // pace on its own.
+  revertDelaySeg.querySelectorAll('button').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const min = Number(btn.dataset.min);
+      revertDelaySeg.querySelectorAll('button').forEach(b => {
+        b.classList.toggle('active', b === btn);
+      });
+      state.revertDelayMin = min;
+      await browser.storage.local.set({ revertDelayMin: min });
+      repaintPersistChip(); // the idle tooltip names the delay
     });
   });
 
@@ -292,6 +316,9 @@ let tipTimer = 0;
 function setTip(el, text) {
   el.dataset.tip = text;
   if (el.localName === 'button') el.setAttribute('aria-label', text);
+  // Text changed under the open chip (the revert countdown re-tips its
+  // targets every second): redraw so the tooltip never shows a stale value.
+  if (el === tipTarget && tipEl.classList.contains('show')) drawTip();
 }
 
 // Triggers declared in the markup get the same treatment as scripted ones.
@@ -751,11 +778,12 @@ async function refreshIp(id) {
 }
 
 // --- Persistent-proxy revert countdown ---------------------------------------
-// The persistent proxy takes the connection back five minutes after the user
-// switches away; the background owns the timer and stores the deadline as
-// revertAt. The popup is only a view over it: while a revert is pending, the
-// header status line shows "4:32 → Work VPN" and the persistent card's pin
-// chip becomes a countdown. One 1s tick drives both and dies with the popup.
+// The persistent proxy takes the connection back revertDelayMin minutes after
+// the user switches away; the background owns the timer and stores the
+// deadline as revertAt. The popup is only a view over it: while a revert is
+// pending, the header status line shows "4:32 → Work VPN" and the persistent
+// card's pin chip becomes a countdown. One 1s tick drives both and dies with
+// the popup.
 
 const persistentProxy = () => state.proxies.find(x => x.persistent) || null;
 
@@ -765,6 +793,14 @@ function revertPending() {
 }
 
 const revertMsLeft = () => Math.max(0, state.revertAt - Date.now());
+
+// "1 minute" / "15 minutes" / "1 hour" — how the idle chip's tooltip
+// describes the configured switch-back delay.
+function revertDelayLabel() {
+  const min = Number(state.revertDelayMin);
+  if (!Number.isFinite(min) || min <= 0) return '5 minutes';
+  return min % 60 === 0 ? plural(min / 60, 'hour') : plural(min, 'minute');
+}
 
 // Under a minute: bare seconds ("42s"); otherwise m:ss ("4:32").
 function fmtCountdown(ms) {
@@ -782,7 +818,8 @@ function makePersistChip(p) {
   if (counting) chip.appendChild(h('span', 'persist-time', fmtCountdown(revertMsLeft())));
   setTip(chip, counting
     ? 'Reverts to this proxy in ' + fmtCountdown(revertMsLeft())
-    : 'Persistent proxy\nConnects on startup, and takes the connection back 5 minutes after you switch away');
+    : 'Persistent proxy\nConnects on startup, and takes the connection back ' +
+      revertDelayLabel() + ' after you switch away');
   return chip;
 }
 

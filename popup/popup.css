@@ -700,6 +700,7 @@ button:focus-visible { outline: 2px solid var(--accent1); outline-offset: 2px; }
 
 .segmented { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
 .theme-seg { grid-template-columns: repeat(3, 1fr); margin-bottom: 14px; }
+.revert-delay-seg { margin-bottom: 14px; }
 .segmented button {
   padding: 8px 0;
   background: var(--input-bg);

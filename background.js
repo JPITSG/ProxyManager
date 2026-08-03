@@ -16,12 +16,23 @@
  *   direct: { color, showCountry, country?, showIp?, ip?, ipFetchedAt? },
  *   selectedId: 'direct' | <proxy id>,
  *   revertAt: epoch ms when the selection reverts to the persistent proxy,
- *             absent while no revert is pending
+ *             absent while no revert is pending,
+ *   revertDelayMin: minutes the persistent proxy waits before taking the
+ *             connection back (default 5)
  * }
  */
 
 const DEFAULT_DIRECT_COLOR = '#7f8ea6';
 const DEFAULT_DIRECT = { color: DEFAULT_DIRECT_COLOR, showCountry: false, showIp: false };
+
+const DEFAULT_REVERT_DELAY_MIN = 5;
+
+// Any positive finite minute count is accepted; anything else falls back to
+// the default so a hand-edited storage value can never break the scheduler.
+function normalizeRevertDelayMin(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_REVERT_DELAY_MIN;
+}
 
 const DEFAULT_STATE = {
   schemaVersion: 1,
@@ -29,6 +40,7 @@ const DEFAULT_STATE = {
   direct: DEFAULT_DIRECT,
   selectedId: 'direct',
   revertAt: null,
+  revertDelayMin: DEFAULT_REVERT_DELAY_MIN,
 };
 
 let state = { ...DEFAULT_STATE, direct: { ...DEFAULT_DIRECT } };
@@ -60,6 +72,7 @@ const stateReady = (async () => {
     state = { ...DEFAULT_STATE, ...stored };
     if (!Array.isArray(state.proxies)) state.proxies = [];
     state.direct = normalizeDirectSettings(state.direct);
+    state.revertDelayMin = normalizeRevertDelayMin(state.revertDelayMin);
 
     // Startup selection rule: a proxy marked persistent takes over the
     // selection (at most one can be — the popup enforces that). Otherwise
@@ -82,12 +95,12 @@ function getSelectedProxy() {
 // --- Persistent-proxy revert -------------------------------------------------
 // The persistent proxy is the home connection: it takes the selection at
 // startup (see stateReady), and when the user switches away from it during a
-// session it takes the connection back REVERT_DELAY_MS later. The deadline
-// lives in storage as revertAt so the popup can count down to it; the timer
-// itself is a plain setTimeout — this background page is persistent, and a
-// browser restart lands on the startup rule anyway.
+// session it takes the connection back revertDelayMin minutes later (set in
+// the popup's Settings → General). The deadline lives in storage as revertAt
+// so the popup can count down to it; the timer itself is a plain setTimeout —
+// this background page is persistent, and a browser restart lands on the
+// startup rule anyway.
 
-const REVERT_DELAY_MS = 5 * 60 * 1000;
 let revertTimer = 0;
 
 // Keeps the invariant: a revert timer is armed exactly while a persistent
@@ -109,9 +122,10 @@ async function syncRevertTimer(reset) {
   // No await between clearing and re-arming, so overlapping calls cannot
   // leave two timers running.
   if (revertTimer) clearTimeout(revertTimer);
-  const deadline = Date.now() + REVERT_DELAY_MS;
+  const delayMs = normalizeRevertDelayMin(state.revertDelayMin) * 60 * 1000;
+  const deadline = Date.now() + delayMs;
   state.revertAt = deadline;
-  revertTimer = setTimeout(runRevert, REVERT_DELAY_MS);
+  revertTimer = setTimeout(runRevert, delayMs);
   browser.storage.local.set({ revertAt: deadline })
     .catch(err => console.error('[Proxy Manager] Failed to store revertAt:', err));
 }
@@ -484,11 +498,14 @@ browser.storage.onChanged.addListener((changes, area) => {
   if (changes.revertAt) {
     state.revertAt = Number.isFinite(changes.revertAt.newValue) ? changes.revertAt.newValue : null;
   }
+  if (changes.revertDelayMin) {
+    state.revertDelayMin = normalizeRevertDelayMin(changes.revertDelayMin.newValue);
+  }
   updateAction();
-  // A new selection restarts the revert countdown; anything else (a proxy
-  // flagged persistent, the flag removed, the proxy deleted) just re-checks
-  // it against the deadline already running.
-  syncRevertTimer(Boolean(changes.selectedId));
+  // A new selection restarts the revert countdown, and so does a new delay
+  // setting; anything else (a proxy flagged persistent, the flag removed,
+  // the proxy deleted) just re-checks the deadline already running.
+  syncRevertTimer(Boolean(changes.selectedId || changes.revertDelayMin));
 });
 
 // --- Toolbar icon -----------------------------------------------------------
