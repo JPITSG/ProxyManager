@@ -29,6 +29,10 @@ const X_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" vi
 
 const FLAG_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg>';
 
+const PIN_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M15 10.8V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.8a2 2 0 0 1-1.1 1.8l-1.8.9A2 2 0 0 0 5 15.2V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.8a2 2 0 0 0-1.1-1.8l-1.8-.9A2 2 0 0 1 15 10.8z"/></svg>';
+
+const TIMER_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>';
+
 const $ = id => document.getElementById(id);
 
 const listView = $('listView');
@@ -91,7 +95,7 @@ const bypassHint = $('bypassHint');
 const bypassEmpty = $('bypassEmpty');
 const addRuleBtn = $('addRuleBtn');
 
-let state = { proxies: [], selectedId: 'direct', direct: { ...DEFAULT_DIRECT } };
+let state = { proxies: [], selectedId: 'direct', direct: { ...DEFAULT_DIRECT }, revertAt: null };
 let currentType = 'http';
 let selectedColor = PALETTE[0];
 let selectedDirectColor = DEFAULT_DIRECT_COLOR;
@@ -135,6 +139,7 @@ async function init() {
     selectedId: 'direct',
     direct: DEFAULT_DIRECT,
     theme: 'system',
+    revertAt: null,
   });
   if (!Array.isArray(state.proxies)) state.proxies = [];
   state.direct = sanitizeDirect(state.direct);
@@ -156,6 +161,7 @@ async function init() {
   applyThemeMode();
   renderList();
   bindEvents();
+  if (revertPending()) startRevertTick(); // opened mid-countdown
 }
 
 function bindEvents() {
@@ -744,6 +750,91 @@ async function refreshIp(id) {
   repaintAddr(id);
 }
 
+// --- Persistent-proxy revert countdown ---------------------------------------
+// The persistent proxy takes the connection back five minutes after the user
+// switches away; the background owns the timer and stores the deadline as
+// revertAt. The popup is only a view over it: while a revert is pending, the
+// header status line shows "4:32 → Work VPN" and the persistent card's pin
+// chip becomes a countdown. One 1s tick drives both and dies with the popup.
+
+const persistentProxy = () => state.proxies.find(x => x.persistent) || null;
+
+function revertPending() {
+  const p = persistentProxy();
+  return Boolean(p && state.revertAt && state.selectedId !== p.id);
+}
+
+const revertMsLeft = () => Math.max(0, state.revertAt - Date.now());
+
+// Under a minute: bare seconds ("42s"); otherwise m:ss ("4:32").
+function fmtCountdown(ms) {
+  const s = Math.ceil(ms / 1000);
+  if (s < 60) return s + 's';
+  return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+}
+
+// The persistent card's chip: a plain pin while idle, a countdown while a
+// revert is pending. Informational only — the tooltip carries the meaning.
+function makePersistChip(p) {
+  const counting = revertPending();
+  const chip = h('span', 'persist-chip' + (counting ? ' counting' : ''));
+  chip.appendChild(svgNode(counting ? TIMER_SVG : PIN_SVG));
+  if (counting) chip.appendChild(h('span', 'persist-time', fmtCountdown(revertMsLeft())));
+  setTip(chip, counting
+    ? 'Reverts to this proxy in ' + fmtCountdown(revertMsLeft())
+    : 'Persistent proxy\nConnects on startup, and takes the connection back 5 minutes after you switch away');
+  return chip;
+}
+
+// Swaps one card's chip in place, so a countdown starting or ending never
+// rebuilds the list.
+function repaintPersistChip() {
+  const p = persistentProxy();
+  const card = p && proxyList.querySelector('.proxy-card[data-id="' + p.id + '"]');
+  const old = card && card.querySelector('.persist-chip');
+  if (old) old.replaceWith(makePersistChip(p));
+}
+
+let revertTick = 0;
+
+function startRevertTick() {
+  if (!revertTick) revertTick = setInterval(onRevertTick, 1000);
+}
+
+function stopRevertTick() {
+  clearInterval(revertTick);
+  revertTick = 0;
+}
+
+function onRevertTick() {
+  if (!revertPending()) { stopRevertTick(); renderStatusLine(); return; }
+  renderStatusLine();
+  const chip = proxyList.querySelector('.persist-chip.counting');
+  if (chip) {
+    const time = chip.querySelector('.persist-time');
+    if (time) time.textContent = fmtCountdown(revertMsLeft());
+    setTip(chip, 'Reverts to this proxy in ' + fmtCountdown(revertMsLeft()));
+  }
+}
+
+// The background owns selection reverts and the revertAt deadline, and both
+// can change while the popup is open — the revert fires underneath it, or a
+// second window's popup switches — so follow them live.
+browser.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local') return;
+  if (changes.selectedId) {
+    state.selectedId = changes.selectedId.newValue || 'direct';
+    markSelected(); // re-marks the cards and refreshes the status line
+  }
+  if (changes.revertAt) {
+    state.revertAt = Number.isFinite(changes.revertAt.newValue) ? changes.revertAt.newValue : null;
+    repaintPersistChip();
+    renderStatusLine();
+    if (revertPending()) startRevertTick();
+    else stopRevertTick();
+  }
+});
+
 // --- Rendering --------------------------------------------------------------
 
 // Ids currently on screen. Cards already in this set skip the entry
@@ -837,6 +928,7 @@ function makeCard(p, index, wasShown) {
   info.appendChild(h('div', 'proxy-name', p.name));
   const meta = h('div', 'proxy-meta');
   meta.appendChild(h('span', 'type-badge ' + p.type, TYPE_LABELS[p.type] || String(p.type).toUpperCase()));
+  if (p.persistent) meta.appendChild(makePersistChip(p));
   if (p.showCountry) {
     if (!p.country && !countryFailed.has(p.id)) refreshCountry(p.id);
     meta.appendChild(makeFlag(p));
@@ -898,8 +990,30 @@ function updateStatus() {
   statusDot.classList.toggle('on', active);
   statusText.textContent = active ? 'Active' : 'Direct';
   statusText.classList.toggle('on', active);
-  statusLine.textContent = p ? p.name + ' · ' + p.host + ':' + p.port : 'Direct connection';
+  renderStatusLine();
   applyTheme(active ? (p.color || PALETTE[0]) : state.direct.color);
+}
+
+// While a revert to the persistent proxy is counting down, the status line
+// appends "4:32 → Work VPN". The countdown leads the suffix so an ellipsis
+// truncation eats the expendable proxy name, never the time.
+function statusLineText() {
+  const p = state.proxies.find(x => x.id === state.selectedId);
+  const base = p ? p.name + ' · ' + p.host + ':' + p.port : 'Direct connection';
+  if (!revertPending()) return base;
+  return base + ' · ' + fmtCountdown(revertMsLeft()) + ' → ' + persistentProxy().name;
+}
+
+// The countdown can make the line wider than the header; while one is
+// pending, a hover tooltip spells out the full sentence.
+function renderStatusLine() {
+  statusLine.textContent = statusLineText();
+  if (revertPending()) {
+    setTip(statusLine, 'Reverts to ' + persistentProxy().name + ' in ' + fmtCountdown(revertMsLeft()));
+  } else {
+    statusLine.removeAttribute('data-tip');
+    statusLine.removeAttribute('aria-label');
+  }
 }
 
 // --- Actions ----------------------------------------------------------------

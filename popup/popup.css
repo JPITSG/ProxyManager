@@ -472,6 +472,36 @@ button.proxy-addr.actionable:hover { color: var(--text); }
 :root[data-theme="light"] .country-flag { background: rgba(18, 26, 38, 0.07); }
 :root[data-theme="light"] .country-flag:hover { filter: brightness(0.92); }
 
+/* Persistent-proxy chip — same footprint as the country flag, but not
+   clickable. A pin marks the persistent proxy; while a switch away from it
+   counts down, the chip turns into an accent-tinted timer with the remaining
+   time (JS swaps the icon and adds .persist-time). */
+.persist-chip {
+  box-sizing: border-box;
+  height: 16px;
+  padding: 0 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.persist-chip svg { display: block; }
+.persist-chip.counting {
+  background: var(--accent-softer);
+  color: var(--accent-text);
+}
+.persist-time {
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+}
+:root[data-theme="light"] .persist-chip { background: rgba(18, 26, 38, 0.07); }
+:root[data-theme="light"] .persist-chip.counting { background: var(--accent-softer); }
+
 .card-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 
 .edit-btn,

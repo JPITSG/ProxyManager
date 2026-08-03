@@ -26,9 +26,11 @@ between them — or back to a direct connection — from the toolbar popup.
   directly. One pattern per rule, `[scheme://]host[:port][/path][?query]`,
   `*` matches anything, omitted parts match all — e.g.
   `*.internal.example.com`, `localhost:8080`, `https://*.corp.com/admin*`.
-- **Persistent profile** — mark one profile to be re-selected
-  automatically at browser startup; otherwise the last used selection
-  applies.
+- **Persistent profile** — mark one profile as the home connection: it is
+  selected automatically at browser startup, and when you switch away during
+  a session it takes the connection back after 5 minutes. While a switch-back
+  is pending, a countdown shows in the popup's header status line and on the
+  persistent profile's card (the pin chip becomes a timer).
 - **Connection country flags** — optional flag chips (off by default)
   showing either a proxy's exit country or the direct connection's country.
   Each is looked up over its matching connection, cached, and refreshed by

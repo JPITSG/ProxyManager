@@ -14,7 +14,9 @@
  *              bypassLan?, bypass?, persistent?, showCountry?, country?,
  *              showIp?, ip?, ipFetchedAt? }],
  *   direct: { color, showCountry, country?, showIp?, ip?, ipFetchedAt? },
- *   selectedId: 'direct' | <proxy id>
+ *   selectedId: 'direct' | <proxy id>,
+ *   revertAt: epoch ms when the selection reverts to the persistent proxy,
+ *             absent while no revert is pending
  * }
  */
 
@@ -26,6 +28,7 @@ const DEFAULT_STATE = {
   proxies: [],
   direct: DEFAULT_DIRECT,
   selectedId: 'direct',
+  revertAt: null,
 };
 
 let state = { ...DEFAULT_STATE, direct: { ...DEFAULT_DIRECT } };
@@ -75,6 +78,59 @@ function getSelectedProxy() {
   if (state.selectedId === 'direct') return null;
   return state.proxies.find(p => p.id === state.selectedId) || null;
 }
+
+// --- Persistent-proxy revert -------------------------------------------------
+// The persistent proxy is the home connection: it takes the selection at
+// startup (see stateReady), and when the user switches away from it during a
+// session it takes the connection back REVERT_DELAY_MS later. The deadline
+// lives in storage as revertAt so the popup can count down to it; the timer
+// itself is a plain setTimeout — this background page is persistent, and a
+// browser restart lands on the startup rule anyway.
+
+const REVERT_DELAY_MS = 5 * 60 * 1000;
+let revertTimer = 0;
+
+// Keeps the invariant: a revert timer is armed exactly while a persistent
+// proxy exists and is not selected. `reset` (a fresh selection) restarts the
+// countdown; any other state change keeps a running deadline.
+async function syncRevertTimer(reset) {
+  await stateReady;
+  const persistent = state.proxies.find(p => p.persistent);
+  if (!persistent || state.selectedId === persistent.id) {
+    if (revertTimer) { clearTimeout(revertTimer); revertTimer = 0; }
+    if (state.revertAt) {
+      state.revertAt = null;
+      browser.storage.local.remove('revertAt')
+        .catch(err => console.error('[Proxy Manager] Failed to clear revertAt:', err));
+    }
+    return;
+  }
+  if (revertTimer && !reset) return; // already counting to the same deadline
+  // No await between clearing and re-arming, so overlapping calls cannot
+  // leave two timers running.
+  if (revertTimer) clearTimeout(revertTimer);
+  const deadline = Date.now() + REVERT_DELAY_MS;
+  state.revertAt = deadline;
+  revertTimer = setTimeout(runRevert, REVERT_DELAY_MS);
+  browser.storage.local.set({ revertAt: deadline })
+    .catch(err => console.error('[Proxy Manager] Failed to store revertAt:', err));
+}
+
+async function runRevert() {
+  revertTimer = 0;
+  await stateReady;
+  const persistent = state.proxies.find(p => p.persistent);
+  state.revertAt = null;
+  browser.storage.local.remove('revertAt')
+    .catch(err => console.error('[Proxy Manager] Failed to clear revertAt:', err));
+  if (!persistent || state.selectedId === persistent.id) return;
+  state.selectedId = persistent.id;
+  await browser.storage.local.set({ selectedId: persistent.id });
+}
+
+// Startup cleanup: a revertAt left over from a previous session is stale —
+// the startup rule in stateReady has already settled the selection.
+stateReady.then(() => syncRevertTimer(false));
 
 // --- Routing ---------------------------------------------------------------
 
@@ -425,7 +481,14 @@ browser.storage.onChanged.addListener((changes, area) => {
   if (changes.proxies) state.proxies = changes.proxies.newValue || [];
   if (changes.direct) state.direct = normalizeDirectSettings(changes.direct.newValue);
   if (changes.selectedId) state.selectedId = changes.selectedId.newValue || 'direct';
+  if (changes.revertAt) {
+    state.revertAt = Number.isFinite(changes.revertAt.newValue) ? changes.revertAt.newValue : null;
+  }
   updateAction();
+  // A new selection restarts the revert countdown; anything else (a proxy
+  // flagged persistent, the flag removed, the proxy deleted) just re-checks
+  // it against the deadline already running.
+  syncRevertTimer(Boolean(changes.selectedId));
 });
 
 // --- Toolbar icon -----------------------------------------------------------
