@@ -15,8 +15,6 @@
  *              showIp?, ip?, ipFetchedAt? }],
  *   direct: { color, showCountry, country?, showIp?, ip?, ipFetchedAt? },
  *   selectedId: 'direct' | 'random' | <proxy id>,
- *   randomPick: id of the pool proxy Random currently routes through,
- *               absent until the first pick,
  *   revertAt: epoch ms when the selection reverts to the persistent proxy,
  *             absent while no revert is pending,
  *   revertDelayMin: minutes the persistent proxy waits before taking the
@@ -41,7 +39,6 @@ const DEFAULT_STATE = {
   proxies: [],
   direct: DEFAULT_DIRECT,
   selectedId: 'direct',
-  randomPick: null,
   revertAt: null,
   revertDelayMin: DEFAULT_REVERT_DELAY_MIN,
 };
@@ -91,33 +88,31 @@ const stateReady = (async () => {
 })();
 
 // --- Random pool -------------------------------------------------------------
-// Proxies flagged `random` form the pool the Random connection picks from.
-// The pick is made here, once per activation of Random, and stored as
-// randomPick so the popup mirrors the same choice; it is re-resolved lazily
-// whenever the stored pick no longer belongs to the pool (flag removed,
-// proxy deleted, import replaced the list).
+// Proxies flagged `random` form the Random connection's pool. While Random
+// is selected there is no sticky pick: every request routes through a pool
+// member drawn at random, so consecutive requests may leave through
+// different exits.
 
-function pickFromPool(pool, excludeId) {
-  const candidates = excludeId ? pool.filter(p => p.id !== excludeId) : pool;
-  const choices = candidates.length ? candidates : pool;
-  return choices[Math.floor(Math.random() * choices.length)] || null;
+const randomPool = () => state.proxies.filter(p => p.random);
+
+function pickFromPool(pool) {
+  return pool[Math.floor(Math.random() * pool.length)] || null;
 }
 
-function getRandomPick() {
-  const pool = state.proxies.filter(p => p.random);
-  if (!pool.length) return null;
-  const cur = pool.find(p => p.id === state.randomPick);
-  if (cur) return cur;
-  const pick = pickFromPool(pool);
-  state.randomPick = pick.id;
-  browser.storage.local.set({ randomPick: pick.id })
-    .catch(err => console.error('[Proxy Manager] Failed to store randomPick:', err));
-  return pick;
+// The proxy a request routes through: the selected proxy, or — while Random
+// is selected — a fresh random pool member for this request.
+function getRoutingProxy() {
+  return state.selectedId === 'random' ? pickFromPool(randomPool()) : getSelectedProxy();
 }
+
+// The pool member each in-flight request was routed through while Random is
+// selected (requestId -> proxy). A 407 challenge must be answered with the
+// same member's credentials, not a new draw. Entries die with the request
+// (see forgetRequest).
+const requestProxies = new Map();
 
 function getSelectedProxy() {
-  if (state.selectedId === 'direct') return null;
-  if (state.selectedId === 'random') return getRandomPick();
+  if (state.selectedId === 'direct' || state.selectedId === 'random') return null;
   return state.proxies.find(p => p.id === state.selectedId) || null;
 }
 
@@ -270,8 +265,11 @@ browser.proxy.onRequest.addListener(
     const probe = probeSessionFor(details.url);
     if (probe) return probe.proxy ? buildProxyInfo(probe.proxy) : { type: 'direct' };
 
-    const proxy = getSelectedProxy();
+    const proxy = getRoutingProxy();
     if (proxy) {
+      // Random draws per request; remember the draw so a 407 challenge on
+      // this request is answered with the same member's credentials.
+      if (state.selectedId === 'random') requestProxies.set(details.requestId, proxy);
       if (proxy.bypassLan && isLanUrl(details.url)) return { type: 'direct' };
       const rules = getBypassRules(proxy);
       if (rules && Bypass.matchUrl(rules, details.url)) return { type: 'direct' };
@@ -413,25 +411,9 @@ function describeProbeFailure(err) {
 }
 
 browser.runtime.onMessage.addListener(async msg => {
-  if (!msg || (msg.type !== 'testProxy' && msg.type !== 'fetchCountry' &&
-               msg.type !== 'fetchIp' && msg.type !== 'rerollRandom')) {
+  if (!msg || (msg.type !== 'testProxy' && msg.type !== 'fetchCountry' && msg.type !== 'fetchIp')) {
     return undefined;
   }
-
-  // rerollRandom — the popup's Random card was clicked while Random is
-  // active: pick again, preferring a different member, and store the new
-  // pick (the popup follows the storage change; routing picks it up here).
-  if (msg.type === 'rerollRandom') {
-    await stateReady;
-    const pool = state.proxies.filter(p => p.random);
-    if (!pool.length) return { ok: false, error: 'The Random pool is empty' };
-    const pick = pickFromPool(pool, state.randomPick);
-    state.randomPick = pick.id;
-    await browser.storage.local.set({ randomPick: pick.id });
-    updateAction();
-    return { ok: true, id: pick.id };
-  }
-
   const directLookup = (msg.type === 'fetchCountry' || msg.type === 'fetchIp') &&
     msg.connectionId === 'direct';
   const proxy = directLookup ? null : msg.proxy;
@@ -511,7 +493,10 @@ browser.webRequest.onAuthRequired.addListener(
   details => {
     if (!details.isProxy) return {};
     const session = probeSessionFor(details.url);
-    const proxy = session ? session.proxy : getSelectedProxy();
+    const proxy = session ? session.proxy
+      : state.selectedId === 'random'
+        ? requestProxies.get(details.requestId) || pickFromPool(randomPool())
+        : getSelectedProxy();
     if (!proxy || !proxy.username) return {};
     if (answeredRequests.has(details.requestId)) {
       // Credentials were already tried for this request and rejected.
@@ -529,7 +514,10 @@ browser.webRequest.onAuthRequired.addListener(
   ['blocking']
 );
 
-const forgetRequest = id => answeredRequests.delete(id);
+const forgetRequest = id => {
+  answeredRequests.delete(id);
+  requestProxies.delete(id);
+};
 browser.webRequest.onCompleted.addListener(d => forgetRequest(d.requestId), { urls: ['<all_urls>'] });
 browser.webRequest.onErrorOccurred.addListener(d => forgetRequest(d.requestId), { urls: ['<all_urls>'] });
 
@@ -539,17 +527,7 @@ browser.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local') return;
   if (changes.proxies) state.proxies = changes.proxies.newValue || [];
   if (changes.direct) state.direct = normalizeDirectSettings(changes.direct.newValue);
-  if (changes.selectedId) {
-    const wasRandom = changes.selectedId.oldValue === 'random';
-    state.selectedId = changes.selectedId.newValue || 'direct';
-    // Every activation of Random gets a fresh pick; re-selecting it from a
-    // different connection never keeps the previous session's member.
-    if (state.selectedId === 'random' && !wasRandom) state.randomPick = null;
-  }
-  if (changes.randomPick) {
-    state.randomPick = typeof changes.randomPick.newValue === 'string'
-      ? changes.randomPick.newValue : null;
-  }
+  if (changes.selectedId) state.selectedId = changes.selectedId.newValue || 'direct';
   if (changes.revertAt) {
     state.revertAt = Number.isFinite(changes.revertAt.newValue) ? changes.revertAt.newValue : null;
   }
@@ -712,26 +690,31 @@ let iconRenderSeq = 0;
 
 async function updateAction() {
   await stateReady;
+  // Random has no single exit, so it gets the neutral tile and no flag —
+  // any member's color or country would misrepresent the routing.
+  const randomActive = state.selectedId === 'random' && randomPool().length > 0;
   const proxy = getSelectedProxy();
   const connection = proxy || state.direct;
-  const color = proxy
-    ? proxy.color || DEFAULT_PROXY_COLOR
+  const color = randomActive ? DEFAULT_DIRECT_COLOR
+    : proxy ? proxy.color || DEFAULT_PROXY_COLOR
     : connection.color || DEFAULT_DIRECT_COLOR;
   // The flag rides the toolbar only when the selected connection shows its
   // country in the list and a real code has been resolved and cached.
-  const country = connection.showCountry &&
+  const country = !randomActive && connection.showCountry &&
     typeof connection.country === 'string' && /^[A-Z]{2}$/.test(connection.country)
     ? connection.country : null;
 
   // text badge from older versions is no longer used — clear it
   browser.browserAction.setBadgeText({ text: '' });
+  const poolSize = randomPool().length;
   browser.browserAction.setTitle({
-    title: proxy
-      ? (state.selectedId === 'random' ? 'Proxy Manager — Random: ' : 'Proxy Manager — ') +
-        proxy.name + ' (' + proxy.host + ':' + proxy.port + ')' +
-        (country ? ' — exit country: ' + countryLabel(country) : '')
-      : 'Proxy Manager — direct connection' +
-        (country ? ' — connection country: ' + countryLabel(country) : ''),
+    title: randomActive
+      ? 'Proxy Manager — Random (' + poolSize + (poolSize === 1 ? ' proxy' : ' proxies') + ')'
+      : proxy
+        ? 'Proxy Manager — ' + proxy.name + ' (' + proxy.host + ':' + proxy.port + ')' +
+          (country ? ' — exit country: ' + countryLabel(country) : '')
+        : 'Proxy Manager — direct connection' +
+          (country ? ' — connection country: ' + countryLabel(country) : ''),
   });
 
   const seq = ++iconRenderSeq;

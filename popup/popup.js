@@ -99,7 +99,7 @@ const bypassHint = $('bypassHint');
 const bypassEmpty = $('bypassEmpty');
 const addRuleBtn = $('addRuleBtn');
 
-let state = { proxies: [], selectedId: 'direct', direct: { ...DEFAULT_DIRECT }, revertAt: null, revertDelayMin: 5, randomPick: null };
+let state = { proxies: [], selectedId: 'direct', direct: { ...DEFAULT_DIRECT }, revertAt: null, revertDelayMin: 5 };
 let currentType = 'http';
 let selectedColor = PALETTE[0];
 let selectedDirectColor = DEFAULT_DIRECT_COLOR;
@@ -145,7 +145,6 @@ async function init() {
     theme: 'system',
     revertAt: null,
     revertDelayMin: 5,
-    randomPick: null,
   });
   if (!Array.isArray(state.proxies)) state.proxies = [];
   state.direct = sanitizeDirect(state.direct);
@@ -791,12 +790,11 @@ async function refreshIp(id) {
 
 const persistentProxy = () => state.proxies.find(x => x.persistent) || null;
 
-// The Random connection routes through one of the proxies flagged
-// `random`; the background owns the pick and stores its id as randomPick,
-// so the popup only ever mirrors it. The card itself is shown exactly while
-// the pool has at least one member.
+// The Random connection routes each request through one of the proxies
+// flagged `random`, drawn fresh per request by the background — there is no
+// sticky pick to mirror. The card is shown exactly while the pool has at
+// least one member.
 const randomPool = () => state.proxies.filter(p => p.random);
-const randomPick = () => state.proxies.find(p => p.id === state.randomPick) || null;
 
 function revertPending() {
   const p = persistentProxy();
@@ -882,12 +880,6 @@ browser.storage.onChanged.addListener((changes, area) => {
   if (changes.selectedId) {
     state.selectedId = changes.selectedId.newValue || 'direct';
     markSelected(); // re-marks the cards and refreshes the status line
-  }
-  if (changes.randomPick) {
-    state.randomPick = typeof changes.randomPick.newValue === 'string'
-      ? changes.randomPick.newValue : null;
-    repaintRandomCard(); // the Random card names the pick, the theme takes its color
-    updateStatus();
   }
   if (changes.revertAt) {
     state.revertAt = Number.isFinite(changes.revertAt.newValue) ? changes.revertAt.newValue : null;
@@ -982,17 +974,16 @@ function makeDirectCard(wasShown) {
 }
 
 // The Random card: a fixed entry like Direct Connection, shown only while
-// the pool has members. Selecting it routes through a pool member the
-// background picks; clicking it again while active re-rolls the pick.
-// It has no edit/delete actions and is not part of drag-to-reorder (no
-// data-index), mirroring the Direct card.
+// the pool has members. Selecting it routes every request through a pool
+// member drawn at random, so there is no pick to show or re-roll — a click
+// while active just re-selects. It has no edit/delete actions and is not
+// part of drag-to-reorder (no data-index), mirroring the Direct card.
 function makeRandomCard(pool, wasShown) {
   const card = h('div', 'proxy-card');
   card.tabIndex = 0;
   card.dataset.id = 'random';
   if (wasShown.has('random')) card.style.animation = 'none';
-  const pick = state.selectedId === 'random' ? randomPick() : null;
-  card.style.setProperty('--pc', (pick && pick.color) || DEFAULT_DIRECT_COLOR);
+  card.style.setProperty('--pc', DEFAULT_DIRECT_COLOR);
   if (state.selectedId === 'random') card.classList.add('selected');
   card.appendChild(h('div', 'radio'));
 
@@ -1004,46 +995,17 @@ function makeRandomCard(pool, wasShown) {
   info.appendChild(meta);
   card.appendChild(info);
 
-  const onPick = () => {
-    if (state.selectedId === 'random') rerollRandom();
-    else selectProxy('random');
-  };
-  card.addEventListener('click', onPick);
+  card.addEventListener('click', () => selectProxy('random'));
   card.addEventListener('keydown', e => {
     if (e.target !== card) return;
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPick(); }
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectProxy('random'); }
   });
   return card;
 }
 
-// The card's address line: the pool size while idle, the current pick while
-// Random is the active connection.
+// The card's address line: the pool size and what Random does with it.
 function randomAddrText(pool) {
-  if (state.selectedId !== 'random') {
-    return 'Picks one of ' + plural(pool.length, 'proxy');
-  }
-  const pick = randomPick();
-  return pick ? 'Using ' + pick.name + ' — click to pick again' : 'Picking a proxy…';
-}
-
-// Rewrites the Random card's address line and identity color in place when
-// the pick changes, so a re-roll never rebuilds the list.
-function repaintRandomCard() {
-  const card = proxyList.querySelector('.proxy-card[data-id="random"]');
-  if (!card) return;
-  const pick = state.selectedId === 'random' ? randomPick() : null;
-  card.style.setProperty('--pc', (pick && pick.color) || DEFAULT_DIRECT_COLOR);
-  const addr = card.querySelector('.proxy-addr');
-  if (addr) addr.textContent = randomAddrText(randomPool());
-}
-
-// Clicking the Random card while it is active picks again. The background
-// owns the pool, stores the new pick as randomPick, and the popup follows
-// that storage change live.
-async function rerollRandom() {
-  try {
-    await browser.runtime.sendMessage({ type: 'rerollRandom' });
-  } catch (err) { /* background unreachable — keep the current pick */ }
+  return 'Random pick per request · ' + plural(pool.length, 'proxy');
 }
 
 function makeCard(p, index, wasShown) {
@@ -1126,9 +1088,8 @@ function updateStatus() {
   statusText.textContent = active ? 'Active' : 'Direct';
   statusText.classList.toggle('on', active);
   renderStatusLine();
-  const pick = randomActive && randomPick();
   applyTheme(p ? (p.color || PALETTE[0])
-    : randomActive ? ((pick && pick.color) || DEFAULT_DIRECT_COLOR)
+    : randomActive ? DEFAULT_DIRECT_COLOR
     : state.direct.color);
 }
 
@@ -1141,10 +1102,7 @@ function statusLineText() {
   if (p) {
     base = p.name + ' · ' + p.host + ':' + p.port;
   } else if (state.selectedId === 'random') {
-    const pick = randomPick();
-    base = pick
-      ? 'Random · ' + pick.name + ' · ' + pick.host + ':' + pick.port
-      : 'Random connection';
+    base = 'Random · ' + plural(randomPool().length, 'proxy');
   } else {
     base = 'Direct connection';
   }
