@@ -11,10 +11,12 @@
  * {
  *   schemaVersion: 1,
  *   proxies: [{ id, name, type, host, port, color?, username?, password?, proxyDNS,
- *              bypassLan?, bypass?, persistent?, showCountry?, country?,
+ *              bypassLan?, bypass?, persistent?, random?, showCountry?, country?,
  *              showIp?, ip?, ipFetchedAt? }],
  *   direct: { color, showCountry, country?, showIp?, ip?, ipFetchedAt? },
- *   selectedId: 'direct' | <proxy id>,
+ *   selectedId: 'direct' | 'random' | <proxy id>,
+ *   randomPick: id of the pool proxy Random currently routes through,
+ *               absent until the first pick,
  *   revertAt: epoch ms when the selection reverts to the persistent proxy,
  *             absent while no revert is pending,
  *   revertDelayMin: minutes the persistent proxy waits before taking the
@@ -39,6 +41,7 @@ const DEFAULT_STATE = {
   proxies: [],
   direct: DEFAULT_DIRECT,
   selectedId: 'direct',
+  randomPick: null,
   revertAt: null,
   revertDelayMin: DEFAULT_REVERT_DELAY_MIN,
 };
@@ -87,8 +90,34 @@ const stateReady = (async () => {
   }
 })();
 
+// --- Random pool -------------------------------------------------------------
+// Proxies flagged `random` form the pool the Random connection picks from.
+// The pick is made here, once per activation of Random, and stored as
+// randomPick so the popup mirrors the same choice; it is re-resolved lazily
+// whenever the stored pick no longer belongs to the pool (flag removed,
+// proxy deleted, import replaced the list).
+
+function pickFromPool(pool, excludeId) {
+  const candidates = excludeId ? pool.filter(p => p.id !== excludeId) : pool;
+  const choices = candidates.length ? candidates : pool;
+  return choices[Math.floor(Math.random() * choices.length)] || null;
+}
+
+function getRandomPick() {
+  const pool = state.proxies.filter(p => p.random);
+  if (!pool.length) return null;
+  const cur = pool.find(p => p.id === state.randomPick);
+  if (cur) return cur;
+  const pick = pickFromPool(pool);
+  state.randomPick = pick.id;
+  browser.storage.local.set({ randomPick: pick.id })
+    .catch(err => console.error('[Proxy Manager] Failed to store randomPick:', err));
+  return pick;
+}
+
 function getSelectedProxy() {
   if (state.selectedId === 'direct') return null;
+  if (state.selectedId === 'random') return getRandomPick();
   return state.proxies.find(p => p.id === state.selectedId) || null;
 }
 
@@ -384,9 +413,25 @@ function describeProbeFailure(err) {
 }
 
 browser.runtime.onMessage.addListener(async msg => {
-  if (!msg || (msg.type !== 'testProxy' && msg.type !== 'fetchCountry' && msg.type !== 'fetchIp')) {
+  if (!msg || (msg.type !== 'testProxy' && msg.type !== 'fetchCountry' &&
+               msg.type !== 'fetchIp' && msg.type !== 'rerollRandom')) {
     return undefined;
   }
+
+  // rerollRandom — the popup's Random card was clicked while Random is
+  // active: pick again, preferring a different member, and store the new
+  // pick (the popup follows the storage change; routing picks it up here).
+  if (msg.type === 'rerollRandom') {
+    await stateReady;
+    const pool = state.proxies.filter(p => p.random);
+    if (!pool.length) return { ok: false, error: 'The Random pool is empty' };
+    const pick = pickFromPool(pool, state.randomPick);
+    state.randomPick = pick.id;
+    await browser.storage.local.set({ randomPick: pick.id });
+    updateAction();
+    return { ok: true, id: pick.id };
+  }
+
   const directLookup = (msg.type === 'fetchCountry' || msg.type === 'fetchIp') &&
     msg.connectionId === 'direct';
   const proxy = directLookup ? null : msg.proxy;
@@ -494,7 +539,17 @@ browser.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local') return;
   if (changes.proxies) state.proxies = changes.proxies.newValue || [];
   if (changes.direct) state.direct = normalizeDirectSettings(changes.direct.newValue);
-  if (changes.selectedId) state.selectedId = changes.selectedId.newValue || 'direct';
+  if (changes.selectedId) {
+    const wasRandom = changes.selectedId.oldValue === 'random';
+    state.selectedId = changes.selectedId.newValue || 'direct';
+    // Every activation of Random gets a fresh pick; re-selecting it from a
+    // different connection never keeps the previous session's member.
+    if (state.selectedId === 'random' && !wasRandom) state.randomPick = null;
+  }
+  if (changes.randomPick) {
+    state.randomPick = typeof changes.randomPick.newValue === 'string'
+      ? changes.randomPick.newValue : null;
+  }
   if (changes.revertAt) {
     state.revertAt = Number.isFinite(changes.revertAt.newValue) ? changes.revertAt.newValue : null;
   }
@@ -672,7 +727,8 @@ async function updateAction() {
   browser.browserAction.setBadgeText({ text: '' });
   browser.browserAction.setTitle({
     title: proxy
-      ? 'Proxy Manager — ' + proxy.name + ' (' + proxy.host + ':' + proxy.port + ')' +
+      ? (state.selectedId === 'random' ? 'Proxy Manager — Random: ' : 'Proxy Manager — ') +
+        proxy.name + ' (' + proxy.host + ':' + proxy.port + ')' +
         (country ? ' — exit country: ' + countryLabel(country) : '')
       : 'Proxy Manager — direct connection' +
         (country ? ' — connection country: ' + countryLabel(country) : ''),

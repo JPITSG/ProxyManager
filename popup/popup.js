@@ -33,6 +33,8 @@ const PIN_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" 
 
 const TIMER_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>';
 
+const SHUFFLE_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>';
+
 const $ = id => document.getElementById(id);
 
 const listView = $('listView');
@@ -83,6 +85,7 @@ const fPass = $('fPass');
 const fDns = $('fDns');
 const fBypassLan = $('fBypassLan');
 const fPersistent = $('fPersistent');
+const fRandom = $('fRandom');
 const fShowCountry = $('fShowCountry');
 const fShowIp = $('fShowIp');
 const fDirectShowCountry = $('fDirectShowCountry');
@@ -96,7 +99,7 @@ const bypassHint = $('bypassHint');
 const bypassEmpty = $('bypassEmpty');
 const addRuleBtn = $('addRuleBtn');
 
-let state = { proxies: [], selectedId: 'direct', direct: { ...DEFAULT_DIRECT }, revertAt: null, revertDelayMin: 5 };
+let state = { proxies: [], selectedId: 'direct', direct: { ...DEFAULT_DIRECT }, revertAt: null, revertDelayMin: 5, randomPick: null };
 let currentType = 'http';
 let selectedColor = PALETTE[0];
 let selectedDirectColor = DEFAULT_DIRECT_COLOR;
@@ -142,6 +145,7 @@ async function init() {
     theme: 'system',
     revertAt: null,
     revertDelayMin: 5,
+    randomPick: null,
   });
   if (!Array.isArray(state.proxies)) state.proxies = [];
   state.direct = sanitizeDirect(state.direct);
@@ -787,6 +791,13 @@ async function refreshIp(id) {
 
 const persistentProxy = () => state.proxies.find(x => x.persistent) || null;
 
+// The Random connection routes through one of the proxies flagged
+// `random`; the background owns the pick and stores its id as randomPick,
+// so the popup only ever mirrors it. The card itself is shown exactly while
+// the pool has at least one member.
+const randomPool = () => state.proxies.filter(p => p.random);
+const randomPick = () => state.proxies.find(p => p.id === state.randomPick) || null;
+
 function revertPending() {
   const p = persistentProxy();
   return Boolean(p && state.revertAt && state.selectedId !== p.id);
@@ -820,6 +831,15 @@ function makePersistChip(p) {
     ? 'Reverts to this proxy in ' + fmtCountdown(revertMsLeft())
     : 'Persistent proxy\nConnects on startup, and takes the connection back ' +
       revertDelayLabel() + ' after you switch away');
+  return chip;
+}
+
+// The Random-pool chip marks the proxies Random can pick — same spot and
+// footprint as the persistent pin. Informational only, like the pin.
+function makeRandomChip() {
+  const chip = h('span', 'random-chip');
+  chip.appendChild(svgNode(SHUFFLE_SVG));
+  setTip(chip, 'In the Random pool\nThe Random connection picks one of these proxies');
   return chip;
 }
 
@@ -863,6 +883,12 @@ browser.storage.onChanged.addListener((changes, area) => {
     state.selectedId = changes.selectedId.newValue || 'direct';
     markSelected(); // re-marks the cards and refreshes the status line
   }
+  if (changes.randomPick) {
+    state.randomPick = typeof changes.randomPick.newValue === 'string'
+      ? changes.randomPick.newValue : null;
+    repaintRandomCard(); // the Random card names the pick, the theme takes its color
+    updateStatus();
+  }
   if (changes.revertAt) {
     state.revertAt = Number.isFinite(changes.revertAt.newValue) ? changes.revertAt.newValue : null;
     repaintPersistChip();
@@ -881,11 +907,16 @@ let shownIds = new Set();
 
 function renderList() {
   const wasShown = shownIds;
-  shownIds = new Set(['direct', ...state.proxies.map(p => p.id)]);
+  shownIds = new Set(['direct', 'random', ...state.proxies.map(p => p.id)]);
 
   stopAddrCycles(); // the old cards' fade timers die with their elements
   proxyList.replaceChildren();
   proxyList.appendChild(makeDirectCard(wasShown));
+
+  // The Random card exists exactly while at least one proxy is flagged for
+  // the pool — right under Direct, above the user's own proxies.
+  const pool = randomPool();
+  if (pool.length) proxyList.appendChild(makeRandomCard(pool, wasShown));
 
   if (state.proxies.length === 0) {
     const empty = h('div', 'empty');
@@ -950,6 +981,71 @@ function makeDirectCard(wasShown) {
   return card;
 }
 
+// The Random card: a fixed entry like Direct Connection, shown only while
+// the pool has members. Selecting it routes through a pool member the
+// background picks; clicking it again while active re-rolls the pick.
+// It has no edit/delete actions and is not part of drag-to-reorder (no
+// data-index), mirroring the Direct card.
+function makeRandomCard(pool, wasShown) {
+  const card = h('div', 'proxy-card');
+  card.tabIndex = 0;
+  card.dataset.id = 'random';
+  if (wasShown.has('random')) card.style.animation = 'none';
+  const pick = state.selectedId === 'random' ? randomPick() : null;
+  card.style.setProperty('--pc', (pick && pick.color) || DEFAULT_DIRECT_COLOR);
+  if (state.selectedId === 'random') card.classList.add('selected');
+  card.appendChild(h('div', 'radio'));
+
+  const info = h('div', 'proxy-info');
+  info.appendChild(h('div', 'proxy-name', 'Random'));
+  const meta = h('div', 'proxy-meta');
+  meta.appendChild(h('span', 'type-badge random', 'RANDOM'));
+  meta.appendChild(h('span', 'proxy-addr', randomAddrText(pool)));
+  info.appendChild(meta);
+  card.appendChild(info);
+
+  const onPick = () => {
+    if (state.selectedId === 'random') rerollRandom();
+    else selectProxy('random');
+  };
+  card.addEventListener('click', onPick);
+  card.addEventListener('keydown', e => {
+    if (e.target !== card) return;
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPick(); }
+  });
+  return card;
+}
+
+// The card's address line: the pool size while idle, the current pick while
+// Random is the active connection.
+function randomAddrText(pool) {
+  if (state.selectedId !== 'random') {
+    return 'Picks one of ' + plural(pool.length, 'proxy');
+  }
+  const pick = randomPick();
+  return pick ? 'Using ' + pick.name + ' — click to pick again' : 'Picking a proxy…';
+}
+
+// Rewrites the Random card's address line and identity color in place when
+// the pick changes, so a re-roll never rebuilds the list.
+function repaintRandomCard() {
+  const card = proxyList.querySelector('.proxy-card[data-id="random"]');
+  if (!card) return;
+  const pick = state.selectedId === 'random' ? randomPick() : null;
+  card.style.setProperty('--pc', (pick && pick.color) || DEFAULT_DIRECT_COLOR);
+  const addr = card.querySelector('.proxy-addr');
+  if (addr) addr.textContent = randomAddrText(randomPool());
+}
+
+// Clicking the Random card while it is active picks again. The background
+// owns the pool, stores the new pick as randomPick, and the popup follows
+// that storage change live.
+async function rerollRandom() {
+  try {
+    await browser.runtime.sendMessage({ type: 'rerollRandom' });
+  } catch (err) { /* background unreachable — keep the current pick */ }
+}
+
 function makeCard(p, index, wasShown) {
   const card = h('div', 'proxy-card');
   card.tabIndex = 0;
@@ -966,6 +1062,7 @@ function makeCard(p, index, wasShown) {
   const meta = h('div', 'proxy-meta');
   meta.appendChild(h('span', 'type-badge ' + p.type, TYPE_LABELS[p.type] || String(p.type).toUpperCase()));
   if (p.persistent) meta.appendChild(makePersistChip(p));
+  if (p.random) meta.appendChild(makeRandomChip());
   if (p.showCountry) {
     if (!p.country && !countryFailed.has(p.id)) refreshCountry(p.id);
     meta.appendChild(makeFlag(p));
@@ -1023,12 +1120,16 @@ function markSelected() {
 
 function updateStatus() {
   const p = state.proxies.find(x => x.id === state.selectedId);
-  const active = Boolean(p);
+  const randomActive = state.selectedId === 'random' && randomPool().length > 0;
+  const active = Boolean(p) || randomActive;
   statusDot.classList.toggle('on', active);
   statusText.textContent = active ? 'Active' : 'Direct';
   statusText.classList.toggle('on', active);
   renderStatusLine();
-  applyTheme(active ? (p.color || PALETTE[0]) : state.direct.color);
+  const pick = randomActive && randomPick();
+  applyTheme(p ? (p.color || PALETTE[0])
+    : randomActive ? ((pick && pick.color) || DEFAULT_DIRECT_COLOR)
+    : state.direct.color);
 }
 
 // While a revert to the persistent proxy is counting down, the status line
@@ -1036,7 +1137,17 @@ function updateStatus() {
 // truncation eats the expendable proxy name, never the time.
 function statusLineText() {
   const p = state.proxies.find(x => x.id === state.selectedId);
-  const base = p ? p.name + ' · ' + p.host + ':' + p.port : 'Direct connection';
+  let base;
+  if (p) {
+    base = p.name + ' · ' + p.host + ':' + p.port;
+  } else if (state.selectedId === 'random') {
+    const pick = randomPick();
+    base = pick
+      ? 'Random · ' + pick.name + ' · ' + pick.host + ':' + pick.port
+      : 'Random connection';
+  } else {
+    base = 'Direct connection';
+  }
   if (!revertPending()) return base;
   return base + ' · ' + fmtCountdown(revertMsLeft()) + ' → ' + persistentProxy().name;
 }
@@ -1064,7 +1175,10 @@ async function selectProxy(id) {
 async function removeProxy(id) {
   state.proxies = state.proxies.filter(p => p.id !== id);
   const update = { proxies: state.proxies };
-  if (state.selectedId === id) {
+  // The selection goes back to direct when its target disappears — the
+  // proxy itself, or the Random pool's last member.
+  if (state.selectedId === id ||
+      (state.selectedId === 'random' && !randomPool().length)) {
     state.selectedId = 'direct';
     update.selectedId = 'direct';
   }
@@ -1368,6 +1482,7 @@ function resetForm() {
   fDns.checked = true;
   fShowCountry.checked = false;
   fShowIp.checked = false;
+  fRandom.checked = false;
   bypassRules.replaceChildren();
   setBypassOpen(false);
   updateBypassHint();
@@ -1402,6 +1517,7 @@ function startEdit(id) {
   fDns.checked = Boolean(p.proxyDNS);
   fBypassLan.checked = Boolean(p.bypassLan);
   fPersistent.checked = Boolean(p.persistent);
+  fRandom.checked = Boolean(p.random);
   fShowCountry.checked = Boolean(p.showCountry);
   fShowIp.checked = Boolean(p.showIp);
 
@@ -1464,6 +1580,7 @@ function readForm() {
     bypassLan: fBypassLan.checked,
     bypass: readRuleInputs(),
     persistent: fPersistent.checked,
+    random: fRandom.checked,
     showCountry: fShowCountry.checked,
     showIp: fShowIp.checked,
   };
@@ -1500,21 +1617,30 @@ async function onSubmit(e) {
     state.proxies.forEach(p => { if (p.id !== editingId) p.persistent = false; });
   }
 
+  let selectionChanged = false;
   if (editingId) {
     const idx = state.proxies.findIndex(x => x.id === editingId);
     if (idx === -1) return showError('This proxy no longer exists.');
     state.proxies[idx] = { ...state.proxies[idx], ...proxy, id: editingId };
-    await browser.storage.local.set({ proxies: state.proxies });
   } else {
     const entry = { ...proxy, id: uid() };
     state.proxies.push(entry);
-    const update = { proxies: state.proxies };
     if (connect) {
       state.selectedId = entry.id;
-      update.selectedId = entry.id;
+      selectionChanged = true;
     }
-    await browser.storage.local.set(update);
   }
+
+  // An edit can drain the Random pool; a Random selection then falls back
+  // to direct, the same as deleting the pool's last member does.
+  if (state.selectedId === 'random' && !randomPool().length) {
+    state.selectedId = 'direct';
+    selectionChanged = true;
+  }
+
+  const update = { proxies: state.proxies };
+  if (selectionChanged) update.selectedId = state.selectedId;
+  await browser.storage.local.set(update);
 
   showView(listView);
   renderList();
@@ -1683,7 +1809,8 @@ function validateBackup(parsed) {
   });
 
   const selectedId = typeof data.selectedId === 'string' &&
-    (data.selectedId === 'direct' || seenIds.has(data.selectedId))
+    (data.selectedId === 'direct' || seenIds.has(data.selectedId) ||
+     (data.selectedId === 'random' && proxies.some(p => p.random)))
     ? data.selectedId
     : 'direct';
   const direct = sanitizeDirect(data.direct);
@@ -1736,6 +1863,7 @@ function sanitizeProxy(raw) {
       ? raw.bypass.filter(s => typeof s === 'string' && s.trim()).map(s => s.trim())
       : [],
     persistent: Boolean(raw.persistent),
+    random: Boolean(raw.random),
     showCountry: Boolean(raw.showCountry),
     showIp: Boolean(raw.showIp),
   };

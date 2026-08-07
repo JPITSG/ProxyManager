@@ -33,6 +33,11 @@ between them — or back to a direct connection — from the toolbar popup.
   switch-back is pending, a live countdown shows in the popup's header
   status line and on the persistent profile's card (the pin chip becomes a
   timer).
+- **Random connection** — flag any profiles with *Include in Random* and a
+  fixed **Random** entry appears in the list, right under Direct Connection
+  (a shuffle chip marks the pool members on their cards). Selecting it
+  connects through a pool member picked at random; clicking the card again
+  picks again. The pick sticks until you switch connections.
 - **Connection country flags** — optional flag chips (off by default)
   showing either a proxy's exit country or the direct connection's country.
   Each is looked up over its matching connection, cached, and refreshed by

@@ -440,6 +440,7 @@ button.proxy-addr.actionable:hover { color: var(--text); }
 .type-badge.socks { background: rgba(45, 212, 191, 0.14); color: #4ce0cd; }
 .type-badge.socks4 { background: rgba(74, 222, 128, 0.14); color: #6ade93; }
 .type-badge.direct { background: rgba(255, 255, 255, 0.08); color: var(--muted); }
+.type-badge.random { background: rgba(167, 139, 250, 0.15); color: #a78bfa; }
 
 /* Exit-country flag — a clickable chip sized exactly like the type badge.
    Shows the country's flag emoji; gray outline flag while the country is
@@ -472,11 +473,13 @@ button.proxy-addr.actionable:hover { color: var(--text); }
 :root[data-theme="light"] .country-flag { background: rgba(18, 26, 38, 0.07); }
 :root[data-theme="light"] .country-flag:hover { filter: brightness(0.92); }
 
-/* Persistent-proxy chip — same footprint as the country flag, but not
-   clickable. A pin marks the persistent proxy; while a switch away from it
-   counts down, the chip turns into an accent-tinted timer with the remaining
-   time (JS swaps the icon and adds .persist-time). */
-.persist-chip {
+/* Persistent-proxy and Random-pool chips — same footprint as the country
+   flag, but not clickable. A pin marks the persistent proxy, a shuffle icon
+   the proxies Random can pick; while a switch away from the persistent
+   proxy counts down, its chip turns into an accent-tinted timer with the
+   remaining time (JS swaps the icon and adds .persist-time). */
+.persist-chip,
+.random-chip {
   box-sizing: border-box;
   height: 16px;
   padding: 0 4px;
@@ -488,7 +491,8 @@ button.proxy-addr.actionable:hover { color: var(--text); }
   color: var(--muted);
   flex-shrink: 0;
 }
-.persist-chip svg { display: block; }
+.persist-chip svg,
+.random-chip svg { display: block; }
 .persist-chip.counting {
   background: var(--accent-softer);
   color: var(--accent-text);
@@ -499,7 +503,8 @@ button.proxy-addr.actionable:hover { color: var(--text); }
   font-weight: 600;
   line-height: 1;
 }
-:root[data-theme="light"] .persist-chip { background: rgba(18, 26, 38, 0.07); }
+:root[data-theme="light"] .persist-chip,
+:root[data-theme="light"] .random-chip { background: rgba(18, 26, 38, 0.07); }
 :root[data-theme="light"] .persist-chip.counting { background: var(--accent-softer); }
 
 .card-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
