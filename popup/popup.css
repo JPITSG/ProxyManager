@@ -82,7 +82,6 @@
 :root[data-theme="light"] .segmented button:hover { border-color: rgba(18, 26, 38, 0.2); }
 :root[data-theme="light"] .slider { background: #ccd4e0; }
 :root[data-theme="light"] .status-text.on { color: #087f5b; }
-:root[data-theme="light"] .status-text,
 :root[data-theme="light"] .status-dot { --status-outline: #475569; }
 :root[data-theme="light"] .status-dot:not(.on) {
   background: #b4bcc9;
@@ -189,12 +188,9 @@ h1 {
   gap: 8px;
   flex-shrink: 0;
 }
-/* Crisp, color-matched edges stay visible independently of the dot's glow. */
-.status-text,
+/* The color-matched outline stays visible independently of the dot's glow. */
 .status-dot { --status-outline: #657185; }
-.status-text.on,
 .status-dot.on,
-:root[data-theme="light"] .status-text.on,
 :root[data-theme="light"] .status-dot.on { --status-outline: #065f46; }
 
 .status-text {
@@ -206,16 +202,7 @@ h1 {
   letter-spacing: 1.2px;
   text-transform: uppercase;
   color: var(--muted);
-  text-shadow:
-    -0.5px -0.5px 0 var(--status-outline),
-     0     -0.5px 0 var(--status-outline),
-     0.5px -0.5px 0 var(--status-outline),
-     0.5px  0     0 var(--status-outline),
-     0.5px  0.5px 0 var(--status-outline),
-     0      0.5px 0 var(--status-outline),
-    -0.5px  0.5px 0 var(--status-outline),
-    -0.5px  0     0 var(--status-outline);
-  transition: color 0.3s, text-shadow 0.3s;
+  transition: color 0.3s;
 }
 .status-text.on { color: var(--success); }
 
