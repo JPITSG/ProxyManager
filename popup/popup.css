@@ -81,6 +81,9 @@
 }
 :root[data-theme="light"] .segmented button:hover { border-color: rgba(18, 26, 38, 0.2); }
 :root[data-theme="light"] .slider { background: #ccd4e0; }
+:root[data-theme="light"] .status-text.on { color: #087f5b; }
+:root[data-theme="light"] .status-text,
+:root[data-theme="light"] .status-dot { --status-outline: #475569; }
 :root[data-theme="light"] .status-dot:not(.on) {
   background: #b4bcc9;
   box-shadow: 0 0 0 4px rgba(18, 26, 38, 0.06);
@@ -186,6 +189,14 @@ h1 {
   gap: 8px;
   flex-shrink: 0;
 }
+/* Crisp, color-matched edges stay visible independently of the dot's glow. */
+.status-text,
+.status-dot { --status-outline: #657185; }
+.status-text.on,
+.status-dot.on,
+:root[data-theme="light"] .status-text.on,
+:root[data-theme="light"] .status-dot.on { --status-outline: #065f46; }
+
 .status-text {
   display: inline-block;
   min-width: 44px;
@@ -195,7 +206,16 @@ h1 {
   letter-spacing: 1.2px;
   text-transform: uppercase;
   color: var(--muted);
-  transition: color 0.3s;
+  text-shadow:
+    -0.5px -0.5px 0 var(--status-outline),
+     0     -0.5px 0 var(--status-outline),
+     0.5px -0.5px 0 var(--status-outline),
+     0.5px  0     0 var(--status-outline),
+     0.5px  0.5px 0 var(--status-outline),
+     0      0.5px 0 var(--status-outline),
+    -0.5px  0.5px 0 var(--status-outline),
+    -0.5px  0     0 var(--status-outline);
+  transition: color 0.3s, text-shadow 0.3s;
 }
 .status-text.on { color: var(--success); }
 
@@ -203,10 +223,11 @@ h1 {
   width: 9px;
   height: 9px;
   border-radius: 3px;
+  outline: 1px solid var(--status-outline);
   background: #5a6274;
   box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.04);
   flex-shrink: 0;
-  transition: background 0.3s;
+  transition: background 0.3s, outline-color 0.3s;
 }
 .status-dot.on {
   background: var(--success);
